@@ -39,6 +39,7 @@ const validateRequest = ajv.compile({
           classificationSource: { enum: CLASSIFICATION_SOURCE },
           source: { enum: SOURCES },
           due: { type: 'string', maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
           est: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.est },
           owner: { type: 'string', maxLength: TEXT_LIMITS.owner },
           acceptanceCriteria: {

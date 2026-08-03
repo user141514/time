@@ -405,21 +405,25 @@ function normalizeGeneratedTasks(taskResponse, evidenceResponse, goals, now) {
       ...deadlineContext,
       goalText: sourceText,
     }));
-    // 服务端确定性权威：原文期限 > evidence期限；责任人缺失时由原文兜底提取。
-    // 提取以 evidence 指向的原文行（或含任务名的分句）为作用域，避免跨行借用。
-    const evidenceLine = primary ? lines[primary.dimension]?.[primary.sourceLineIndex] : '';
-    const segment = (evidenceLine || sourceText).split(/[。；;\n]/).find(part => part.includes(task.name));
-    const extractionSource = segment || evidenceLine || sourceText;
+    // 服务端确定性权威：期限/责任人直接从 primary evidence 的 quote 提取，
+    // 不依赖生成后的任务名重新定位原文（任务名可能被模型改写）。
+    const extractionSource = primary?.quote || '';
     const extractedDeadline = extractDeadlineFromText(extractionSource, deadlineContext);
     const grounded = {
       ...normalizedTask,
       due: extractedDeadline ? extractedDeadline.date : normalizedTask.due,
+      ...(extractedDeadline?.time || normalizedTask.dueTime ? { dueTime: extractedDeadline?.time || normalizedTask.dueTime } : {}),
       owner: normalizedTask.owner === '待确认'
         ? extractOwnerFromText(extractionSource) || normalizedTask.owner
         : normalizedTask.owner,
     };
+    // 期限被原文权威覆盖后需重新判定紧急度
+    const reUrged = applyDeadlineUrgency(grounded, {
+      ...deadlineContext,
+      goalText: sourceText,
+    });
     return {
-      task: grounded,
+      task: reUrged,
       evidenceIds: [...candidate.evidenceIds],
     };
   });
@@ -484,6 +488,11 @@ async function decomposeTasks({
   const keptIds = new Set(dedupeCrossSourceTasks(normalized.map(item => item.task)).map(task => task.id));
   const kept = normalized.filter(item => keptIds.has(item.task.id));
   const tasks = kept.map(item => item.task);
+  // 存储快照与 taskEvidence 保持一致，用 evidenceIds 匹配过滤原始 grounded 任务
+  const keptEvidenceIds = new Set(kept.map(item => JSON.stringify(item.evidenceIds)));
+  stage.response = { ...stage.response, tasks: stage.response.tasks.filter(
+    t => keptEvidenceIds.has(JSON.stringify(t.evidenceIds))
+  )};
   const smart = checkTaskSmart({ tasks });
   return {
     intake: {

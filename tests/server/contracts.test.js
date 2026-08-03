@@ -231,9 +231,19 @@ test('new writes retain only valid dates or pending', () => {
 });
 
 test('extractOwnerFromText：明确提交/负责/完成 识别为责任人', () => {
-  assert.equal(extractOwnerFromText('王芳今天18:00前提交新版排期表'), '王芳');
+  // 只接受明确语法，通用"名词+动词"不再识别
+  assert.equal(extractOwnerFromText('王芳今天18:00前提交新版排期表'), null);
   assert.equal(extractOwnerFromText('由研发组负责支付回调日志采集'), '研发组');
-  assert.equal(extractOwnerFromText('李明明天下午完成接口回归方案'), '李明');
+  assert.equal(extractOwnerFromText('李明明天下午完成接口回归方案'), null);
+});
+
+test('extractOwnerFromText：由X负责/负责人：X/请X提交 等明确语法识别', () => {
+  assert.equal(extractOwnerFromText('由研发组负责支付回调日志采集'), '研发组');
+  assert.equal(extractOwnerFromText('负责人：李明'), '李明');
+  assert.equal(extractOwnerFromText('责任人：张伟'), '张伟');
+  assert.equal(extractOwnerFromText('安排王芳完成报告'), '王芳');
+  assert.equal(extractOwnerFromText('请研发组提交方案'), '研发组');
+  assert.equal(extractOwnerFromText('王芳负责跟进接口'), '王芳');
 });
 
 test('extractOwnerFromText：提交给/交给 不得识别为责任人', () => {

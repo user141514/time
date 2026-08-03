@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { AuthClient } = require('../helpers/auth-client');
 const { createAuthTestApp } = require('../helpers/test-app');
+const { shanghaiBusinessDay } = require('../../server/daily-tracking/business-date');
 
 async function authenticatedClient(t, modelClient) {
   const { baseUrl } = await createAuthTestApp(t, { modelClient });
@@ -220,15 +221,15 @@ test('零任务返回 422 NO_ACTIONABLE_TASKS', async (t) => {
 test('四栏多行输入：totalLines 按实际行数计算并全流程串联（公网验收场景）', async (t) => {
   const multiEntries = {
     昨天: '客户投诉复盘尚未完成，需要补充原因和改进措施，预计1小时。',
-    今天: '王芳今天18:00前提交新版排期表，预计1小时。\n研发组今天完成支付回调日志采集，预计2小时。',
-    明天: '李明明天下午完成接口回归方案，预计1.5小时。',
+    今天: '由王芳负责今天18:00前提交新版排期表，预计1小时。\n研发组负责今天完成支付回调日志采集，预计2小时。',
+    明天: '由李明负责明天下午完成接口回归方案，预计1.5小时。',
     后天: '本月底形成支付系统稳定性改进路线图，预计4小时。',
   };
   const evidence = [
     { id: 'E1', dimension: '昨天', sourceLineIndex: 0, quote: multiEntries.昨天, observation: '客户投诉复盘', kind: 'work', status: 'unfinished', owner: '待确认', due: '待确认' },
-    { id: 'E2', dimension: '今天', sourceLineIndex: 0, quote: '王芳今天18:00前提交新版排期表，预计1小时。', observation: '提交新版排期表', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
-    { id: 'E3', dimension: '今天', sourceLineIndex: 1, quote: '研发组今天完成支付回调日志采集，预计2小时。', observation: '支付回调日志采集', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
-    { id: 'E4', dimension: '明天', sourceLineIndex: 0, quote: multiEntries.明天, observation: '接口回归方案', kind: 'goal', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E2', dimension: '今天', sourceLineIndex: 0, quote: '由王芳负责今天18:00前提交新版排期表，预计1小时。', observation: '提交新版排期表', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E3', dimension: '今天', sourceLineIndex: 1, quote: '研发组负责今天完成支付回调日志采集，预计2小时。', observation: '支付回调日志采集', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E4', dimension: '明天', sourceLineIndex: 0, quote: '由李明负责明天下午完成接口回归方案，预计1.5小时。', observation: '接口回归方案', kind: 'goal', status: 'planned', owner: '待确认', due: '待确认' },
     { id: 'E5', dimension: '后天', sourceLineIndex: 0, quote: multiEntries.后天, observation: '稳定性改进路线图', kind: 'goal', status: 'planned', owner: '待确认', due: '待确认' },
   ];
   const multiTasks = [
@@ -262,14 +263,18 @@ test('四栏多行输入：totalLines 按实际行数计算并全流程串联（
   assert.equal(decomposeResponse.status, 200);
   const decomposed = await decomposeResponse.json();
   assert.equal(decomposed.tasks.length, 5);
-  // 服务端确定性：今天18:00前 → 当天业务日期；本月底 → 当月最后一天
+  // 服务端确定性：今天18:00前 → 当天业务日期；本月底 → 当月最后一天（均按上海时区）
+  const today = shanghaiBusinessDay().trackingDate;
   const schedule = decomposed.tasks.find(task => task.name === '提交新版排期表');
-  assert.equal(schedule.due, new Date().toISOString().slice(0, 10));
+  assert.equal(schedule.due, today);
   assert.equal(schedule.owner, '王芳');
   assert.equal(decomposed.tasks.find(task => task.name === '支付回调日志采集').owner, '研发组');
   assert.equal(decomposed.tasks.find(task => task.name === '接口回归方案').owner, '李明');
-  const now = new Date();
-  const monthEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+  const monthEnd = new Date(Date.UTC(
+    Number(today.slice(0, 4)),
+    Number(today.slice(5, 7)),
+    0,
+  )).toISOString().slice(0, 10);
   assert.equal(decomposed.tasks.find(task => task.name === '稳定性改进路线图').due, monthEnd);
 
   const smartResponse = await request('/api/time-management/tasks/smart-check', { tasks: decomposed.tasks });

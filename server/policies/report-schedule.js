@@ -45,13 +45,14 @@ function buildReportScheduleContext({
 
   for (const task of tasks) {
     const due = parseDue(task.due, { now, timeZone });
-    if (!due?.time || due.date > referenceDate) continue;
+    const time = due?.time || task.dueTime || null;
+    if (!time || (due?.date || '') > referenceDate) continue;
 
-    const endMinute = clockMinutes(...due.time.split(':'));
+    const endMinute = clockMinutes(...time.split(':'));
     fixedPoints.push({
       taskId: task.id,
       taskName: task.name,
-      time: due.time,
+      time,
       minute: endMinute,
     });
 

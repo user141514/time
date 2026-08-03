@@ -35,6 +35,7 @@ const validateRequest = ajv.compile({
           name: { type: 'string', maxLength: TEXT_LIMITS.taskName },
           source: { enum: SOURCES },
           due: { type: 'string', maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
           est: { type: 'string', maxLength: TEXT_LIMITS.est },
           owner: { type: 'string', maxLength: TEXT_LIMITS.owner },
           importance: nullableImportance,

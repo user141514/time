@@ -275,6 +275,7 @@ const snapshotSchemaV2 = {
           urgency: { enum: URGENCY },
           source: { enum: SOURCES },
           due: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
           est: { type: 'string', maxLength: TEXT_LIMITS.est },
           owner: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.owner },
           acceptanceCriteria: {

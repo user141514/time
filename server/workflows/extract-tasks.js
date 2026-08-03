@@ -46,6 +46,7 @@ const TASK_SCHEMA = {
     urgency: { type: 'string', enum: URGENCY },
     source: { type: 'string', enum: SOURCES },
     due: { type: 'string', maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
     est: { type: 'string', maxLength: TEXT_LIMITS.est },
     owner: { type: 'string', maxLength: TEXT_LIMITS.owner },
     acceptanceCriteria: {

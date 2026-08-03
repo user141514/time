@@ -274,6 +274,7 @@ function rememberCsrfToken(value) {
 function cancelPending() {
   operationId += 1;
   cancelActiveRequest();
+  clearInterval(progressTimer);
   state.pending = null;
 }
 
@@ -1021,6 +1022,7 @@ function renderProcessing(title, subtitle, steps, { cancelable = true, baseActio
 
 function handleWorkflowError(error, id) {
   if (!isCurrent(id) || error.code === 'REQUEST_CANCELLED') return;
+  clearInterval(progressTimer);
   state.pending = null;
   state.error = error;
   render();
@@ -1180,6 +1182,7 @@ async function decomposeTasks() {
         code: 'DECOMPOSITION_RESPONSE_INVALID',
       });
     }
+    clearInterval(progressTimer);
     state.pending = null;
     state.intake = result.intake;
     state.decomposition = result.decomposition;
@@ -1239,6 +1242,7 @@ async function diagnoseDistribution() {
   try {
     const result = await postJson('/api/time-management/distribution/diagnose', { tasks: state.tasks });
     if (!isCurrent(id)) return;
+    clearInterval(progressTimer);
     state.pending = null;
     state.distribution = result;
     state.matrix = null;
@@ -1295,6 +1299,7 @@ async function classifyTasks() {
     const matrix = await postJson('/api/time-management/matrix/classify', { tasks: state.tasks });
     if (!isCurrent(id)) return;
     state.tasks = validateAndMergeMatrix(state.tasks, matrix);
+    clearInterval(progressTimer);
     state.pending = null;
     state.matrix = matrix;
     state.report = null;
@@ -1314,7 +1319,9 @@ function validateReport(report) {
 }
 
 async function generateReport({ baseOnly = false } = {}) {
-  if (state.pending || !state.matrix || !state.distribution) return;
+  if (!state.matrix || !state.distribution) return;
+  if (!baseOnly && state.pending) return;
+  if (baseOnly) cancelPending();
   const id = ++operationId;
   state.pending = 'report';
   renderProcessing('正在生成优化报告', '综合任务、时间结构和四象限生成行动建议', ['汇总优先处理顺序', '读取时间分布诊断', '校准精力分配', '输出改变与举措'], { baseAction: !baseOnly });
@@ -1329,6 +1336,7 @@ async function generateReport({ baseOnly = false } = {}) {
     const report = await postJson('/api/time-management/report/generate', body);
     if (!isCurrent(id)) return;
     validateReport(report);
+    clearInterval(progressTimer);
     state.pending = null;
     state.report = report;
     state.step = 5;

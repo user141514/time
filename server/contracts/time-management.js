@@ -139,45 +139,26 @@ function normalizeDueForWrite(task) {
   return { ...normalized, due: `${match[1]}-${match[2]}-${match[3]}` };
 }
 
-// 责任人确定性兜底提取：仅当 evidence 未给出 owner 时使用。
-// "王芳今天18:00前提交…" → 王芳；"由研发组负责" → 研发组；
-// "提交给王芳" 中的 王芳 不会被识别（动词后跟 给/到/至 时排除）。
-// ponytail: 启发式兜底，词表有界；模型正确提取时完全不介入。
-// 动词后跟 给/到/至/人 时不是责任人动作（"提交给X""负责人"）
-const OWNER_VERB = '(?:提交|负责|完成|跟进|处理|汇总|交付|输出|落实|推动|牵头)(?!给|到|至|人)';
-const OWNER_GAP = '(?:今天|今日|明天|明日|后天|今晚|今夜|下午|上午|中午|晚上|傍晚|凌晨|'
-  + '本周[一二三四五六日天]|下周[一二三四五六日天]|月底|月末|本月|'
-  + '\\d{1,2}[:：]\\d{2}|\\d{1,2}点(?:\\d{1,2})?分?|前|之前|内)';
-const OWNER_PATTERN = new RegExp(
-  `(?:由|让|请|安排)?([\\u4e00-\\u9fa5]{2,4}?)(?:${OWNER_GAP}){0,3}${OWNER_VERB}`,
-  'g',
-);
-const OWNER_STOPWORDS = new Set([
-  // 时间词与虚词，避免"今天提交""尚未完成"被误判为责任人
-  '今天', '今日', '明天', '明日', '后天', '昨晚', '昨天', '上周', '本周', '下周', '本月',
-  '上午', '下午', '晚上', '中午', '凌晨', '傍晚', '刚刚', '马上', '立刻', '尽快',
-  '尚未', '还未', '还没', '已经', '还没有', '未能', '无法', '需要', '将要', '即将',
-  '预计', '大概', '可能', '不要', '无需', '没有', '未', '必须',
-  // 动词本身不是责任人
-  '提交', '负责', '完成', '跟进', '处理', '汇总', '交付', '输出', '落实', '推动', '牵头',
-]);
+  // 责任人确定性兜底提取：仅当 evidence 未给出 owner 时使用。
+  // 只接受明确语法，拒绝通用"名词+动词"模式，无法识别时保持待确认。
+  const OWNER_PATTERNS = [
+    /负责人[：:]s*([一-龥]{2,6})/,
+    /责任人[：:]s*([一-龥]{2,6})/,
+    /由([一-龥]{2,6})负责/,
+    /安排([一-龥]{2,6})完成/,
+    /请([一-龥]{2,6})提交/,
+    /([一-龥]{2,4})负责(?!人)/,
+  ];
 
-// 名称内嵌时间词/虚词即视为误判（如"复盘尚未完成"中的"复盘尚未"、"采集已完成"中的"采集已"）
-const OWNER_POISONS = ['尚未', '还未', '还没', '已经', '没有', '无法', '未能', '需要', '预计',
-  '今天', '今日', '明天', '明日', '后天', '今晚', '昨夜', '昨天', '上午', '下午', '晚上',
-  '中午', '凌晨', '傍晚', '本月', '本周', '下周', '月底', '月末', '之前', '完成', '提交',
-  '已', '未', '需', '被', '将', '把', '给', '从', '要', '的', '了', '中', '与', '和', '及', '并', '在'];
-
-function extractOwnerFromText(text) {
-  if (typeof text !== 'string') return null;
-  for (const match of text.matchAll(OWNER_PATTERN)) {
-    const name = match[1];
-    if (name && !OWNER_STOPWORDS.has(name) && !OWNER_POISONS.some(poison => name.includes(poison))) {
-      return name;
+  function extractOwnerFromText(text) {
+    if (typeof text !== "string") return null;
+    for (const pattern of OWNER_PATTERNS) {
+      const match = pattern.exec(text);
+      if (match) return match[1];
     }
+    return null;
   }
-  return null;
-}
+
 
 // 昨天遗留与今天同名行动只保留今天行动（跨来源去重）；
 // 同名同来源保持独立，不按名称去重。
@@ -203,6 +184,7 @@ function normalizeTask(task) {
     urgency: hasClassification ? task.urgency : null,
     source: task.source,
     due: normalizedText(task.due, '待确认'),
+    ...(task.dueTime ? { dueTime: task.dueTime } : {}),
     est: normalizedText(task.est),
     owner: normalizedText(task.owner, '待确认'),
     acceptanceCriteria,

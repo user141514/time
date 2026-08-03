@@ -12,9 +12,10 @@ const RELATIVE_DAY_OFFSETS = Object.freeze({
 const WEEKDAY_NAMES = Object.freeze({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 });
 const CLOCK_TIME = /(\d{1,2})[:：](\d{2})/;
 const CN_TIME = /(\d{1,2})点(?:(\d{1,2})分?)?/;
+const TIME_PERIOD = /(上午|下午|晚上|凌晨)\s*$/;
 const DAY_WORD = new RegExp(`(${Object.keys(RELATIVE_DAY_OFFSETS).join('|')})`);
 const WEEK_DAY = /本周([一二三四五六日天])/;
-const MONTH_END = /(?:本月)?(?:底|月底|月末|月底前|月内)/;
+const MONTH_END = /(?:月底|月末|月底前|本月内|(?<![一-龥])月内)/;
 
 function resolveNow(now) {
   const value = typeof now === 'function' ? now() : now;
@@ -82,8 +83,7 @@ function parseRelativeDue(due, context = {}) {
     context.now || Date.now,
     context.timeZone || DEFAULT_TIME_ZONE,
   );
-  const offsets = { 今天: 0, 今日: 0, 明天: 1, 后天: 2 };
-  const date = addCalendarDays(referenceDate, offsets[relativeDay]);
+  const date = addCalendarDays(referenceDate, RELATIVE_DAY_OFFSETS[relativeDay]);
   const time = hourText == null
     ? null
     : `${String(Number(hourText)).padStart(2, '0')}:${minuteText}`;
@@ -154,7 +154,15 @@ function extractDeadlineFromText(text, context = {}) {
     const clock = CLOCK_TIME.exec(after);
     const cn = CN_TIME.exec(after);
     const timeMatch = clock || cn;
-    push(addCalendarDays(referenceDate, offset), timeMatch ? formatTime(timeMatch) : null, match.index);
+    let time = timeMatch ? formatTime(timeMatch) : null;
+    if (time && timeMatch === cn) {
+      const hour = Number(cn[1]);
+      const period = TIME_PERIOD.exec(after.slice(0, cn.index));
+      if (period && (period[1] === '下午' || period[1] === '晚上') && hour < 12) {
+        time = `${String(hour + 12).padStart(2, '0')}:${time.slice(3)}`;
+      }
+    }
+    push(addCalendarDays(referenceDate, offset), time, match.index);
   }
   const weekDay = new RegExp(WEEK_DAY.source, 'g');
   while ((match = weekDay.exec(text)) !== null) {

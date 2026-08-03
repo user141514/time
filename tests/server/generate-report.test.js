@@ -553,7 +553,7 @@ test('时间冲突回退导致剩余保护任务安排丢失时仍降级', async
   assert.equal(result.degradedReason, 'REPORT_REMAINING_PROTECTED_UNSCHEDULED');
 });
 
-test('报告 API 连续时间冲突时返回安全内容且日志记录降级原因', async () => {
+test('报告 API 连续时间冲突时稳定化并返回安全内容', async () => {
   const { createApp } = require('../../server/app');
   const entries = [];
   const tasks = [task('meeting', {
@@ -594,9 +594,9 @@ test('报告 API 连续时间冲突时返回安全内容且日志记录降级原
     assert.equal(response.status, 200);
     assert.doesNotMatch(JSON.stringify(body), /PRIVATE-CONFLICT/);
     assert.equal(modelClient.calls.length, 2);
-    assert.equal(body.degraded, true);
-    assert.equal(reportEntry.modelOutputReason, 'REPORT_UNATTRIBUTED_SUGGESTION');
-    assert.equal(reportEntry.modelAttempts, 2);
+    assert.equal(body.degraded, undefined);
+    assert.match(body.adjustments[0], /避开已有截止点和保护时段/);
+    assert.equal(reportEntry.modelOutputReason, undefined);
     assert.equal(reportEntry.status, 200);
   } finally {
     await close(server);
@@ -894,13 +894,14 @@ test('规则3：无法归因到任务/维度/分布事实的建议被拒绝', as
   assert.equal(result.degradedReason, 'REPORT_UNATTRIBUTED_SUGGESTION');
 });
 
-test('规则4：无明确依据修改/推迟当天到期任务时拒绝并降级', async () => {
+test('规则4：无明确依据推迟当天到期任务时拒绝并降级', async () => {
+  // 当天到期任务由 assertProtectedGuidance 拦截（推迟受保护任务），验证该路径
   const tasks = [task('task-a', {
     name: '发布灰度',
     due: '2026-07-20 18:00',
   })];
   const invalid = reportFor(tasks, {
-    adjustments: ['建议将发布灰度修改为下周进行。'],
+    adjustments: ['建议将发布灰度推迟到下周进行。'],
   });
   const modelClient = queuedModel([invalid, invalid]);
   const result = await generateReport({
@@ -911,7 +912,27 @@ test('规则4：无明确依据修改/推迟当天到期任务时拒绝并降级
     now: () => new Date('2026-07-20T04:00:00.000Z'),
   });
   assert.equal(result.degraded, true);
-  assert.equal(result.degradedReason, 'REPORT_TODAY_TASK_CHANGED_WITHOUT_BASIS');
+  assert.equal(result.degradedReason, 'REPORT_PROTECTED_TASK_DELAYED');
+});
+
+test('规则4：仅“修改”不含推迟语义时不拒绝有依据建议', async () => {
+  const tasks = [task('task-a', {
+    name: '修改支付告警处理流程',
+    due: '2026-07-20 18:00',
+  })];
+  const modelClient = queuedModel([reportFor(tasks, {
+    adjustments: ['修改支付告警处理流程后再交付。'],
+  })]);
+  const result = await generateReport({
+    tasks,
+    matrix: matrixFor(tasks),
+    goals: { 昨天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-07-20T04:00:00.000Z'),
+  });
+  assert.equal(modelClient.calls.length, 1);
+  assert.equal(result.degraded, undefined);
+  assert.match(textOf(result.adjustments[0]), /修改支付告警处理流程/);
 });
 
 test('规则4：带明确时刻的当天任务调整不被拒绝', async () => {

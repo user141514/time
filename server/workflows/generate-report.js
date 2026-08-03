@@ -54,6 +54,7 @@ const validateRequest = ajv.compile({
           importance: nullableImportance,
           urgency: nullableUrgency,
           due: { type: 'string', maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
           est: { type: 'string', maxLength: TEXT_LIMITS.est },
           owner: { type: 'string', maxLength: TEXT_LIMITS.owner },
           acceptanceCriteria: {
@@ -101,6 +102,7 @@ const validateRequest = ajv.compile({
         },
       },
     },
+    baseOnly: { type: 'boolean' },
     goals: {
       type: 'object',
       additionalProperties: false,
@@ -283,6 +285,10 @@ function basisForText(text, { tasks, goals, distribution }) {
   for (const key of GOAL_KEYS) {
     if (goals[key]?.trim() && text.includes(key)) return { type: 'dimension', dimension: key };
   }
+  // 步骤5提示词要求 energyRules“强调守住第二象限、压缩第四象限”，象限名即确定性分布策略依据
+  if (/(?:第一|第二|第三|第四)象限/.test(text)) return { type: 'distribution' };
+  // stabilizeScheduleConflicts 的确定性回退文本（server 生成，非模型编造）
+  if (text.includes('避开已有截止点和保护时段')) return { type: 'distribution' };
   return null;
 }
 
@@ -291,7 +297,11 @@ function rejectionReasonFor(text, context) {
   // 规则1：引用了空的明天或后天目标
   for (const key of ['明天', '后天']) {
     if (!context.goals[key]?.trim() && text.includes(key)) {
-      return REPORT_OUTPUT_REASON.REPORT_EMPTY_DIMENSION_REFERENCE;
+      const isTaskName = context.tasks.some(item => item.name.includes(key));
+      const isSanctionedCorrection = new RegExp(`当前没有填写${key}事项`).test(text);
+      if (!isTaskName && !isSanctionedCorrection) {
+        return REPORT_OUTPUT_REASON.REPORT_EMPTY_DIMENSION_REFERENCE;
+      }
     }
   }
   // 规则2：建议把任务授权/委派/交办给其现有 owner
@@ -306,7 +316,7 @@ function rejectionReasonFor(text, context) {
     }
   }
   // 规则4：建议修改或推迟当天到期任务，却没有明确依据
-  if (/推迟|延后|取消|暂缓|搁置|修改/.test(text)) {
+  if (/推迟|延后|取消|暂缓|搁置/.test(text)) {
     const todayTask = context.tasks.find(item => (
       dueDateOf(item) === context.businessDate && text.includes(item.name)
     ));
@@ -358,6 +368,9 @@ function buildBaseReport(input, priorityContext) {
     .filter(key => input.goals[key]?.trim())
     .map(key => targetText[key])
     .slice(0, 3);
+  if (energyRules.length === 0) {
+    energyRules.push('当前未填写目标栏，建议先填写四栏内容以生成精力分配建议。');
+  }
 
   const emptyKeys = GOAL_KEYS.filter(key => !input.goals[key]?.trim());
   const adjustments = [

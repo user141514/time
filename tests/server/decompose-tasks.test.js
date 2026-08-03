@@ -474,10 +474,14 @@ function evidenceTaskOutput({ quote = '王芳今天18:00前提交新版排期表
   };
 }
 
-test('模型遗漏时服务端确定性恢复：王芳今天18:00前 → owner=王芳 due=当天', async () => {
-  const modelClient = queuedModel([evidenceTaskOutput()]);
+test('模型遗漏时服务端确定性恢复：由王芳负责 → owner=王芳 due=当天', async () => {
+  const modelClient = queuedModel([evidenceTaskOutput({
+    quote: '由王芳负责今天18:00前提交新版排期表。',
+    owner: '待确认',
+    due: '待确认',
+  })]);
   const result = await decomposeTasks({
-    entries: { 昨天: '', 今天: '王芳今天18:00前提交新版排期表。', 明天: '', 后天: '' },
+    entries: { 昨天: '', 今天: '由王芳负责今天18:00前提交新版排期表。', 明天: '', 后天: '' },
     modelClient,
     now: () => new Date('2026-08-03T04:00:00.000Z'), // 2026-08-03 上海周一
   });
@@ -486,6 +490,23 @@ test('模型遗漏时服务端确定性恢复：王芳今天18:00前 → owner=�
   assert.equal(modelClient.calls[0].responseSchemaName, 'time_evidence_task_generation_v2');
   assert.equal(result.tasks.length, 1);
   assert.equal(result.tasks[0].owner, '王芳');
+  assert.equal(result.tasks[0].due, '2026-08-03');
+});
+
+test('模型遗漏且无明确语法时 owner 保持待确认', async () => {
+  const modelClient = queuedModel([evidenceTaskOutput({
+    quote: '今天18:00前提交新版排期表。',
+    owner: '待确认',
+    due: '待确认',
+  })]);
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '今天18:00前提交新版排期表。', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-03T04:00:00.000Z'),
+  });
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].owner, '待确认');
   assert.equal(result.tasks[0].due, '2026-08-03');
 });
 

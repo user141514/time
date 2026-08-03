@@ -133,6 +133,7 @@ const COACH_RESPONSE_SCHEMA = Object.freeze({
           },
           owner: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.owner },
           due: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
         },
       },
     },
@@ -162,6 +163,7 @@ const TASK_CANDIDATE_SCHEMA = Object.freeze({
     urgency: { type: 'string', enum: URGENCY },
     source: { type: 'string', enum: SOURCES },
     due: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.due },
+          dueTime: { type: "string", maxLength: 10 },
     est: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.est },
     owner: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.owner },
     acceptanceCriteria: {
