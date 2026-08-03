@@ -203,6 +203,7 @@ async function classifyMatrix({
       taskId: task.id,
       importance: task.importance,
       urgency: task.urgency,
+      classificationSource: task.classificationSource,
     })), '');
   }
 

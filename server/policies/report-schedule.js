@@ -92,13 +92,8 @@ function conflictsWithText(text, scheduleContext) {
   return false;
 }
 
-function textOf(item) {
-  return typeof item === 'string' ? item : String(item?.text || '');
-}
-
 function hasScheduleConflict(report, scheduleContext) {
   return [...report.energyRules, ...report.adjustments]
-    .map(textOf)
     .some(text => conflictsWithText(text, scheduleContext));
 }
 

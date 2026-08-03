@@ -240,9 +240,8 @@ async function main() {
   if (options.showReport) {
     console.log('\n报告内容（诊断用）：');
     for (const item of report.order || []) console.log(`  顺序: ${item.taskId} — ${item.reason}`);
-    const itemText = item => (typeof item === 'string' ? item : item?.text || '');
-    for (const item of report.energyRules || []) console.log(`  精力: ${itemText(item)}`);
-    for (const item of report.adjustments || []) console.log(`  举措: ${itemText(item)}`);
+    for (const item of report.energyRules || []) console.log(`  精力: ${item}`);
+    for (const item of report.adjustments || []) console.log(`  举措: ${item}`);
     if (report.degraded) console.log(`  降级: ${report.degradedReason || 'MODEL_ERROR'}`);
   }
 

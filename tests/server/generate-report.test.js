@@ -35,18 +35,16 @@ function reportFor(tasks, overrides = {}) {
   };
 }
 
-// 与 reportFor 对应的带依据期望结构
+// 与 reportFor 对应的期望响应（依据只在服务端内部计算，不进入响应）
 function expectedReport(tasks, overrides = {}) {
   const name = tasks[0]?.name || '任务';
-  const firstId = tasks[0]?.id;
   return {
     order: tasks.slice(0, 5).map(item => ({
       taskId: item.id,
       reason: '该任务重要且紧急',
-      basis: { type: 'task', taskId: item.id },
     })),
-    energyRules: [{ text: `优先完成${name}`, basis: { type: 'task', taskId: firstId } }],
-    adjustments: [{ text: `每周复盘${name}的进展`, basis: { type: 'task', taskId: firstId } }],
+    energyRules: [`优先完成${name}`],
+    adjustments: [`每周复盘${name}的进展`],
     ...overrides,
   };
 }
@@ -118,21 +116,6 @@ test('报告只引用当前任务并保留三段结构', async () => {
   });
 });
 
-test('每条建议都带服务端计算的依据（task/dimension/distribution/empty_dimension）', async () => {
-  const tasks = [task('task-a', { name: '提交复盘', source: '复盘' })];
-  const matrix = matrixFor(tasks);
-  const modelClient = queuedModel([reportFor(tasks)]);
-  const goals = { 昨天: '复盘不足', 后天: '' };
-
-  const result = await generateReport({ tasks, matrix, goals, modelClient });
-  for (const item of result.order) assert.deepEqual(item.basis, { type: 'task', taskId: item.taskId });
-  for (const item of [...result.energyRules, ...result.adjustments]) {
-    assert.ok(item.text);
-    assert.ok(item.basis?.type);
-    assert.ok(['task', 'dimension', 'distribution', 'empty_dimension'].includes(item.basis.type));
-  }
-});
-
 test('五步报告接收时间分布诊断并原样传入模型上下文', async () => {
   const tasks = [task('task-a', { name: '提交复盘', source: '复盘' })];
   const matrix = matrixFor(tasks);
@@ -164,7 +147,7 @@ test('五步报告接收时间分布诊断并原样传入模型上下文', async
 
   assert.deepEqual(result, {
     ...expectedReport(tasks, {
-      adjustments: [{ text: '先清理遗留事项。', basis: { type: 'distribution' } }],
+      adjustments: ['先清理遗留事项。'],
     }),
   });
   const modelInput = JSON.parse(modelClient.calls[0].user);
@@ -817,12 +800,14 @@ test('模型持续失败或超时时返回确定性基础报告，不抛错不�
   assert.match(result.order[0].reason, /2026-07-20 前完成/);
   assert.match(result.order[0].reason, /责任人 王芳/);
   // 时间分布：只来自确定性分布事实
-  assert.ok(result.energyRules.every(item => item.basis.type === 'distribution'));
-  assert.ok(result.adjustments.some(item => item.text === '适当授权。'));
-  // 空栏只生成确认句式，不编造目标
-  const emptyNotes = result.adjustments.filter(item => item.basis.type === 'empty_dimension');
-  assert.deepEqual(emptyNotes.map(item => item.basis.dimension), ['昨天', '明天', '后天']);
-  for (const item of emptyNotes) assert.match(item.text, /^当前没有填写.*可确认是否需要补充。$/);
+  assert.ok(result.energyRules.length >= 1);
+  assert.ok(result.adjustments.includes('适当授权。'));
+  // 空栏只生成确认句式，不编造目标；分布建议不引用空维度；调整建议不超过 3 条（历史契约上限）
+  assert.ok(result.adjustments.length <= 3);
+  const emptyNotes = result.adjustments.filter(item => /^当前没有填写.*可确认是否需要补充。$/.test(item));
+  assert.ok(emptyNotes.length >= 1);
+  for (const item of emptyNotes) assert.match(item, /^当前没有填写(昨天|明天|后天)事项，可确认是否需要补充。$/);
+  assert.ok(!result.adjustments.some(item => /明天|后天/.test(item) && !/^当前没有填写/.test(item)));
 });
 
 // --- 阶段2.2：四条语义拒绝规则 ---

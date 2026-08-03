@@ -962,18 +962,14 @@ function deleteDailyTask(taskId) {
   scheduleDailySave();
 }
 
-function reportItemText(item) {
-  return typeof item === 'string' ? item : String(item?.text || '');
-}
-
 function hydrateReport() {
   const target = document.getElementById('report-markdown');
   if (!target || !state.report) return;
   const markdown = [
     '### 精力分配原则', '',
-    ...state.report.energyRules.map(reportItemText), '',
+    ...state.report.energyRules, '',
     '### 改变与举措', '',
-    ...state.report.adjustments.map(reportItemText),
+    ...state.report.adjustments,
   ].join('\n');
   window.renderMarkdown(target, markdown);
 }
@@ -983,8 +979,8 @@ function historyReportMarkdown(item) {
   return [
     '## 今日优先处理顺序', '',
     ...item.report.order.map(entry => `- ${taskById.get(entry.taskId)?.name || ''} — ${entry.reason}`), '',
-    '## 精力分配原则', '', ...item.report.energyRules.map(reportItemText), '',
-    '## 改变与举措', '', ...item.report.adjustments.map(reportItemText),
+    '## 精力分配原则', '', ...item.report.energyRules, '',
+    '## 改变与举措', '', ...item.report.adjustments,
   ].join('\n');
 }
 

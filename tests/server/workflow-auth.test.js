@@ -142,16 +142,14 @@ test('a valid session, same-origin request, and CSRF preserve all four workflow 
           note: '',
         };
       }
-      // 建议文字必须可归因到任务名，服务端会回写 basis
-      const taskId = requestBody.tasks[0].id;
+      // 建议文字必须可归因到任务名（依据只在服务端内部校验）
       expectedReport = {
         order: requestBody.tasks.map(task => ({
           taskId: task.id,
           reason: '该任务重要且紧急',
-          basis: { type: 'task', taskId: task.id },
         })),
-        energyRules: [{ text: '优先完成提交方案', basis: { type: 'task', taskId } }],
-        adjustments: [{ text: '每周固定复盘提交方案的进展', basis: { type: 'task', taskId } }],
+        energyRules: ['优先完成提交方案'],
+        adjustments: ['每周固定复盘提交方案的进展'],
       };
       return {
         order: requestBody.tasks.map(task => ({

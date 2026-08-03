@@ -446,11 +446,13 @@ test('versioned prompts expose stable identity, version and content hash', () =>
   );
 });
 
-function todayCoach({ quote = '王芳今天18:00前提交新版排期表。', owner = '待确认', due = '待确认' } = {}) {
+// task-first 单调用流水线：一次模型调用返回 evidence + tasks，due/owner 由 evidence 落地
+function evidenceTaskOutput({ quote = '王芳今天18:00前提交新版排期表。', owner = '待确认', due = '待确认' } = {}) {
   return {
     evidence: [{
       id: 'E1',
       dimension: '今天',
+      sourceLineIndex: 0,
       quote,
       observation: '提交新版排期表',
       kind: 'work',
@@ -458,41 +460,37 @@ function todayCoach({ quote = '王芳今天18:00前提交新版排期表。', ow
       owner,
       due,
     }],
-    coachingAnalysis: analysisFor(['E1']),
+    tasks: [{
+      name: '提交新版排期表',
+      importance: '高',
+      urgency: '高',
+      source: '今天',
+      est: '1h',
+      acceptanceCriteria: [],
+      nextAction: '',
+      status: 'pending',
+      evidenceIds: ['E1'],
+    }],
   };
 }
 
 test('模型遗漏时服务端确定性恢复：王芳今天18:00前 → owner=王芳 due=当天', async () => {
-  const modelClient = queuedModel([
-    todayCoach(),
-    generatedTasks([task({
-      name: '提交新版排期表',
-      source: '今天',
-      due: '待确认',
-      owner: '待确认',
-    })]),
-  ]);
+  const modelClient = queuedModel([evidenceTaskOutput()]);
   const result = await decomposeTasks({
     entries: { 昨天: '', 今天: '王芳今天18:00前提交新版排期表。', 明天: '', 后天: '' },
     modelClient,
     now: () => new Date('2026-08-03T04:00:00.000Z'), // 2026-08-03 上海周一
   });
 
+  assert.equal(modelClient.calls.length, 1);
+  assert.equal(modelClient.calls[0].responseSchemaName, 'time_evidence_task_generation_v2');
   assert.equal(result.tasks.length, 1);
   assert.equal(result.tasks[0].owner, '王芳');
   assert.equal(result.tasks[0].due, '2026-08-03');
 });
 
 test('模型给出明确期限时保留模型结果，服务端不覆盖', async () => {
-  const modelClient = queuedModel([
-    todayCoach({ owner: '王芳', due: '今天' }),
-    generatedTasks([task({
-      name: '提交新版排期表',
-      source: '今天',
-      due: '今天',
-      owner: '王芳',
-    })]),
-  ]);
+  const modelClient = queuedModel([evidenceTaskOutput({ owner: '王芳', due: '今天' })]);
   const result = await decomposeTasks({
     entries: { 昨天: '', 今天: '王芳今天18:00前提交新版排期表。', 明天: '', 后天: '' },
     modelClient,

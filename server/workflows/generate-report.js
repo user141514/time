@@ -317,28 +317,20 @@ function rejectionReasonFor(text, context) {
   return null;
 }
 
-// 规则3：引用了不存在的任务 → 无依据建议统一拒绝
-function attachBasesAndValidate(report, context) {
-  const order = report.order.map(item => {
+// 规则3：引用了不存在的任务 → 无依据建议统一拒绝。
+// 依据只在服务端内部计算（不进入响应，历史契约保持字符串数组）。
+function assertEvidenceGate(report, context) {
+  for (const item of report.order) {
     const reason = rejectionReasonFor(item.reason, context);
     if (reason) throw reportOutputError(reason);
-    return {
-      ...item,
-      basis: { type: 'task', taskId: item.taskId },
-    };
-  });
-  const attach = (items) => items.map((text) => {
+  }
+  for (const text of [...report.energyRules, ...report.adjustments]) {
     const reason = rejectionReasonFor(text, context);
     if (reason) throw reportOutputError(reason);
-    const basis = basisForText(text, context);
-    if (!basis) throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_UNATTRIBUTED_SUGGESTION);
-    return { text, basis };
-  });
-  return {
-    order,
-    energyRules: attach(report.energyRules),
-    adjustments: attach(report.adjustments),
-  };
+    if (!basisForText(text, context)) {
+      throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_UNATTRIBUTED_SUGGESTION);
+    }
+  }
 }
 
 // ---------- 确定性基础报告（阶段2.3/6） ----------
@@ -353,11 +345,7 @@ function buildBaseReport(input, priorityContext) {
     if (!parts.length) {
       parts.push(`按 ${priorityContext.actionByTaskId[taskId] || '当前优先级'} 推进`);
     }
-    return {
-      taskId,
-      reason: parts.join('，'),
-      basis: { type: 'task', taskId },
-    };
+    return { taskId, reason: parts.join('，') };
   });
 
   const targetText = {
@@ -368,20 +356,16 @@ function buildBaseReport(input, priorityContext) {
   };
   const energyRules = GOAL_KEYS
     .filter(key => input.goals[key]?.trim())
-    .map(key => ({ text: targetText[key], basis: { type: 'distribution' } }));
+    .map(key => targetText[key])
+    .slice(0, 3);
 
-  const adjustments = (input.distribution?.recommendations || []).map(text => ({
-    text,
-    basis: { type: 'distribution' },
-  }));
-  for (const key of GOAL_KEYS) {
-    if (!input.goals[key]?.trim()) {
-      adjustments.push({
-        text: `当前没有填写${key}事项，可确认是否需要补充。`,
-        basis: { type: 'empty_dimension', dimension: key },
-      });
-    }
-  }
+  const emptyKeys = GOAL_KEYS.filter(key => !input.goals[key]?.trim());
+  const adjustments = [
+    // 分布建议不得引用空维度（引用空栏目标即视为编造）
+    ...(input.distribution?.recommendations || [])
+      .filter(text => !emptyKeys.some(key => text.includes(key))),
+    ...emptyKeys.map(key => `当前没有填写${key}事项，可确认是否需要补充。`),
+  ].slice(0, 3);
   return { order, energyRules, adjustments };
 }
 
@@ -506,7 +490,8 @@ async function generateReport({
       }
       assertReportSemantics(report, input.tasks, input.goals, priorityContext);
       if (!hasScheduleConflict(report, scheduleContext)) {
-        return attachBasesAndValidate(report, evidenceContext);
+        assertEvidenceGate(report, evidenceContext);
+        return report;
       }
 
       if (attempt < 2) {
@@ -526,7 +511,8 @@ async function generateReport({
       if (hasScheduleConflict(stabilized, scheduleContext)) {
         throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_SCHEDULE_CONFLICT);
       }
-      return attachBasesAndValidate(stabilized, evidenceContext);
+      assertEvidenceGate(stabilized, evidenceContext);
+      return stabilized;
     } catch (error) {
       const normalized = normalizeModelError(error);
       normalized.modelAttempts = attempt;

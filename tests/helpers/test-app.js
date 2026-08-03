@@ -23,6 +23,7 @@ async function createAuthTestApp(t, options = {}) {
     authBoundary: runtime.authBoundary,
     config,
     logger: options.logger,
+    ...runtimeOptions,
   });
   const server = await new Promise((resolve, reject) => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening));

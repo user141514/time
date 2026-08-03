@@ -783,6 +783,12 @@ function validateHistorySnapshot(value, { dueMode = 'read', schemaVersion = HIST
         const withOwner = normalizeOptionalOwner(normalizeOptionalDue(task));
         return dueMode === 'write' ? normalizeDueForWrite(withOwner) : withOwner;
       }),
+      // 降级报告是生成期状态，不写入历史契约（report 保持字符串数组）
+      report: value.report
+        ? Object.fromEntries(
+          Object.entries(value.report).filter(([key]) => !key.startsWith('degraded')),
+        )
+        : value.report,
     }
     : value;
   const validateShape = schemaVersion === 3 ? validateShapeV3 : validateShapeV2;
