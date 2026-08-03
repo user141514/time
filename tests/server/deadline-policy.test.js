@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   applyDeadlineUrgency,
+  extractDeadlineFromText,
   normalizeDue,
   parseDue,
   parseExplicitDue,
@@ -193,4 +194,47 @@ test('日期纠偏返回新对象且不改变其他任务字段或原输入', ()
   assert.notEqual(result, input);
   assert.deepEqual(input, snapshot);
   assert.deepEqual(result, { ...snapshot, urgency: '高' });
+});
+
+test('确定性期限提取：今天/明天/后天按上海业务日期解析', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('王芳今天提交新版排期表', context), { date: '2026-07-20', time: null });
+  assert.deepEqual(extractDeadlineFromText('明天下午完成接口回归方案', context), { date: '2026-07-21', time: null });
+  assert.deepEqual(extractDeadlineFromText('后天完成部署', context), { date: '2026-07-22', time: null });
+});
+
+test('确定性期限提取：今晚18:00前 与 今天18点前 归到当天', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('王芳今晚18:00前提交排期表', context), { date: '2026-07-20', time: '18:00' });
+  assert.deepEqual(extractDeadlineFromText('今天18点前完成联调', context), { date: '2026-07-20', time: '18:00' });
+});
+
+test('确定性期限提取：本周五按上海业务日期的星期计算', () => {
+  // 2026-07-20 是周一，本周五为 2026-07-24
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('本周五发布灰度', context), { date: '2026-07-24', time: null });
+});
+
+test('确定性期限提取：本月底解析为当月最后一天', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('本月底形成稳定性改进路线图', context), { date: '2026-07-31', time: null });
+  assert.deepEqual(extractDeadlineFromText('月底前完成备份', context), { date: '2026-07-31', time: null });
+});
+
+test('确定性期限提取：显式日期与 X月X日', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('8月10日前交付', context), { date: '2026-08-10', time: null });
+  assert.deepEqual(extractDeadlineFromText('2026-09-01 完成', context), { date: '2026-09-01', time: null });
+});
+
+test('确定性期限提取：多期限取最早（最紧迫）', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(extractDeadlineFromText('本周五整理，明天18:00前提交', context), { date: '2026-07-21', time: '18:00' });
+});
+
+test('确定性期限提取：无法唯一确定返回 null，时长不算时刻', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.equal(extractDeadlineFromText('完成支付回调日志采集，预计2小时', context), null);
+  assert.equal(extractDeadlineFromText('', context), null);
+  assert.equal(extractDeadlineFromText(null, context), null);
 });

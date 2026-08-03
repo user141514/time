@@ -546,8 +546,12 @@ function reportStatus() {
 function stepFiveBody() {
   const taskById = new Map(state.tasks.map(task => [task.id, task]));
   const order = state.report?.order || [];
+  const degraded = state.report?.degraded
+    ? `<div class="aibar" style="margin:0 0 12px"><span class="sp">!</span><div>当前为基础报告（只引用真实输入）。${state.report.degradedReason === 'CLIENT_REQUESTED_BASE' ? '你选择了立即使用基础报告。' : 'AI 增强未通过证据校验。'}</div>
+      <button class="btn btn-ghost btn-sm" data-action="regenerate-report" ${state.pending ? 'disabled' : ''}>重新生成 AI 建议</button></div>`
+    : '';
   return `${panelHead('节点 ⑤ · 输出', '时间投入优化报告', '报告综合任务、时间分布和四象限结果，给出执行顺序、结构目标与改变举措。')}
-    <div class="panel-body"><div class="rcard"><div class="rcard-h"><span class="n">1</span>今日执行顺序</div><ul class="rlist">${order.map(item => `<li><b>${escapeHtml(taskById.get(item.taskId)?.name || '')}</b>：${escapeHtml(item.reason)}</li>`).join('') || '<li>当前没有可排序任务。</li>'}</ul></div>
+    <div class="panel-body">${degraded}<div class="rcard"><div class="rcard-h"><span class="n">1</span>今日执行顺序</div><ul class="rlist">${order.map(item => `<li><b>${escapeHtml(taskById.get(item.taskId)?.name || '')}</b>：${escapeHtml(item.reason)}</li>`).join('') || '<li>当前没有可排序任务。</li>'}</ul></div>
       <div class="rcard"><div class="rcard-h"><span class="n">2</span>时间投入优化目标</div><ul class="rlist">${state.distribution.categories.map(item => `<li>${item.key}：${item.percent}% → <b>${CATS[item.key].target}</b></li>`).join('')}</ul></div>
       <div class="rcard"><div class="rcard-h"><span class="n">3</span>要做的改变与举措</div><div id="report-markdown" class="markdown-body"></div></div>
       ${reportStatus()}
@@ -958,14 +962,18 @@ function deleteDailyTask(taskId) {
   scheduleDailySave();
 }
 
+function reportItemText(item) {
+  return typeof item === 'string' ? item : String(item?.text || '');
+}
+
 function hydrateReport() {
   const target = document.getElementById('report-markdown');
   if (!target || !state.report) return;
   const markdown = [
     '### 精力分配原则', '',
-    ...state.report.energyRules.map(item => `- ${item}`), '',
+    ...state.report.energyRules.map(reportItemText), '',
     '### 改变与举措', '',
-    ...state.report.adjustments.map(item => `- ${item}`),
+    ...state.report.adjustments.map(reportItemText),
   ].join('\n');
   window.renderMarkdown(target, markdown);
 }
@@ -975,8 +983,8 @@ function historyReportMarkdown(item) {
   return [
     '## 今日优先处理顺序', '',
     ...item.report.order.map(entry => `- ${taskById.get(entry.taskId)?.name || ''} — ${entry.reason}`), '',
-    '## 精力分配原则', '', ...item.report.energyRules.map(item => `- ${item}`), '',
-    '## 改变与举措', '', ...item.report.adjustments.map(item => `- ${item}`),
+    '## 精力分配原则', '', ...item.report.energyRules.map(reportItemText), '',
+    '## 改变与举措', '', ...item.report.adjustments.map(reportItemText),
   ].join('\n');
 }
 
@@ -985,10 +993,34 @@ function hydrateHistoryReport() {
   if (target && state.historyDetail) window.renderMarkdown(target, historyReportMarkdown(state.historyDetail));
 }
 
-function renderProcessing(title, subtitle, steps) {
+let progressTimer = null;
+let progressStartedAt = 0;
+
+function renderProcessing(title, subtitle, steps, { cancelable = true, baseAction = false } = {}) {
   const panel = document.getElementById('panel');
   if (!panel) return;
-  panel.innerHTML = `<div class="aiproc"><div class="ai-orb"></div><div style="font-size:16px;font-weight:750">${escapeHtml(title)}</div><div style="color:var(--muted);font-size:13px">${escapeHtml(subtitle)}</div><div class="ai-steps">${steps.map(text => `<div class="ai-step"><span class="dot"></span>${escapeHtml(text)}</div>`).join('')}</div></div>`;
+  clearInterval(progressTimer);
+  progressStartedAt = Date.now();
+  const existing = panel.innerHTML;
+  // 保留上一步结果与已确认任务，只叠加进度卡片，不整页覆盖
+  panel.innerHTML = `<div class="panel-progress"><div class="aiproc">
+    <div class="ai-orb"></div>
+    <div style="font-size:16px;font-weight:750">${escapeHtml(title)}</div>
+    <div style="color:var(--muted);font-size:13px">${escapeHtml(subtitle)}</div>
+    <div class="ai-steps">${steps.map(text => `<div class="ai-step"><span class="dot"></span>${escapeHtml(text)}</div>`).join('')}</div>
+    <div class="progress-wait">已等待 <span id="progress-elapsed">0</span> 秒</div>
+    ${baseAction ? '<div class="progress-hint">模型响应较慢，你可以继续使用基础报告。</div>' : ''}
+    <div class="progress-actions">
+      ${baseAction ? '<button class="btn btn-ghost btn-sm" data-action="use-base-report">使用基础报告</button>' : ''}
+      ${cancelable ? '<button class="btn btn-ghost btn-sm" data-action="cancel-workflow">取消生成</button>' : ''}
+    </div>
+  </div><div class="progress-dim">${existing}</div></div>`;
+  progressTimer = setInterval(() => {
+    const element = document.getElementById('progress-elapsed');
+    if (element) {
+      element.textContent = String(Math.max(0, Math.round((Date.now() - progressStartedAt) / 1000)));
+    }
+  }, 1000);
 }
 
 function handleWorkflowError(error, id) {
@@ -1285,18 +1317,20 @@ function validateReport(report) {
   if (new Set(orderIds).size !== orderIds.length || orderIds.some(id => !ids.has(id))) throw new Error('报告引用了无效任务，请重试。');
 }
 
-async function generateReport() {
+async function generateReport({ baseOnly = false } = {}) {
   if (state.pending || !state.matrix || !state.distribution) return;
   const id = ++operationId;
   state.pending = 'report';
-  renderProcessing('正在生成优化报告', '综合任务、时间结构和四象限生成行动建议', ['汇总优先处理顺序', '读取时间分布诊断', '校准精力分配', '输出改变与举措']);
+  renderProcessing('正在生成优化报告', '综合任务、时间结构和四象限生成行动建议', ['汇总优先处理顺序', '读取时间分布诊断', '校准精力分配', '输出改变与举措'], { baseAction: !baseOnly });
   try {
-    const report = await postJson('/api/time-management/report/generate', {
+    const body = {
       tasks: state.tasks,
       matrix: state.matrix,
       goals: state.entries,
       distribution: state.distribution,
-    });
+    };
+    if (baseOnly) body.baseOnly = true;
+    const report = await postJson('/api/time-management/report/generate', body);
     if (!isCurrent(id)) return;
     validateReport(report);
     state.pending = null;
@@ -1883,6 +1917,14 @@ document.addEventListener('click', event => {
   else if (action === 'diagnose') diagnoseDistribution();
   else if (action === 'classify') classifyTasks();
   else if (action === 'generate-report') generateReport();
+  else if (action === 'use-base-report') generateReport({ baseOnly: true });
+  else if (action === 'regenerate-report') generateReport();
+  else if (action === 'cancel-workflow') {
+    clearInterval(progressTimer);
+    cancelPending();
+    state.error = null;
+    render();
+  }
   else if (action === 'open-add-task') openAddTask(element.dataset.defaultCategory || '今天');
   else if (action === 'close-modal') closeModal();
   else if (action === 'save-task') saveTask();

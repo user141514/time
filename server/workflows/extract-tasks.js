@@ -8,6 +8,7 @@ const {
   URGENCY,
   SOURCES,
   TASK_STATUS,
+  dedupeCrossSourceTasks,
   normalizeDueForWrite,
   normalizeTask,
   parseEstimatedMinutes,
@@ -212,10 +213,10 @@ async function extractTasks({
       continue;
     }
 
-    const tasks = response.tasks.map((task) => normalizeTask({
+    const tasks = dedupeCrossSourceTasks(response.tasks.map((task) => normalizeTask({
       ...task,
       classificationSource: 'ai-extraction',
-    }));
+    })));
     return {
       tasks: tasks.map((task) => normalizeDueForWrite(applyDeadlineUrgency(task, {
         ...deadlineContext,

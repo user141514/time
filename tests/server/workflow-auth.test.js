@@ -110,11 +110,7 @@ test('a valid session, same-origin request, and CSRF preserve all four workflow 
     })),
     overall: 'pass',
   };
-  const expectedReport = {
-    order: [],
-    energyRules: ['先处理重要且紧急的任务'],
-    adjustments: ['每周固定复盘一次'],
-  };
+  let expectedReport;
   const modelClient = {
     async completeJson(input) {
       callIndex += 1;
@@ -146,11 +142,25 @@ test('a valid session, same-origin request, and CSRF preserve all four workflow 
           note: '',
         };
       }
-      expectedReport.order = requestBody.tasks.map((task) => ({
-        taskId: task.id,
-        reason: '该任务重要且紧急',
-      }));
-      return expectedReport;
+      // 建议文字必须可归因到任务名，服务端会回写 basis
+      const taskId = requestBody.tasks[0].id;
+      expectedReport = {
+        order: requestBody.tasks.map(task => ({
+          taskId: task.id,
+          reason: '该任务重要且紧急',
+          basis: { type: 'task', taskId: task.id },
+        })),
+        energyRules: [{ text: '优先完成提交方案', basis: { type: 'task', taskId } }],
+        adjustments: [{ text: '每周固定复盘提交方案的进展', basis: { type: 'task', taskId } }],
+      };
+      return {
+        order: requestBody.tasks.map(task => ({
+          taskId: task.id,
+          reason: '该任务重要且紧急',
+        })),
+        energyRules: ['优先完成提交方案'],
+        adjustments: ['每周固定复盘提交方案的进展'],
+      };
     },
   };
   const { baseUrl } = await createAuthTestApp(t, { modelClient });

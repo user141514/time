@@ -520,16 +520,15 @@ test('报告最终失败日志包含白名单诊断字段且不含敏感内容',
       },
     );
     const body = await response.json();
-    assert.equal(response.status, 502);
-    assert.equal(body.error.code, 'MODEL_OUTPUT_INVALID');
+    assert.equal(response.status, 200);
+    assert.equal(body.degraded, true);
+    assert.equal(body.degradedReason, 'REPORT_ORDER_REFERENCE_INVALID');
 
     await new Promise(resolve => setImmediate(resolve));
     assert.ok(entries.length >= 1);
     const reportEntry = entries.find(entry => entry.path === '/api/time-management/report/generate');
     assert.ok(reportEntry);
-    assert.equal(reportEntry.requestId, body.error.requestId);
-    assert.ok(['REPORT_ORDER_REFERENCE_INVALID', 'REPORT_ORDER_PRIORITY_MISMATCH', 'MODEL_JSON_INVALID']
-      .includes(reportEntry.modelOutputReason));
+    assert.equal(reportEntry.modelOutputReason, 'REPORT_ORDER_REFERENCE_INVALID');
     assert.equal(reportEntry.modelAttempts, 2);
     assert.equal(Object.keys(reportEntry).sort().join(','), 'durationMs,modelAttempts,modelOutputReason,path,requestId,status');
     assert.doesNotMatch(JSON.stringify(reportEntry), new RegExp(marker));
@@ -604,10 +603,9 @@ test('新解析诊断码在日志中以固定枚举出现且不泄漏 marker', a
       },
     );
     const body = await response.json();
-    assert.equal(response.status, 502);
-    assert.equal(body.error.code, 'MODEL_OUTPUT_INVALID');
-    assert.equal(body.error.diagnosticCode, undefined);
-    assert.doesNotMatch(JSON.stringify(body), /MODEL_JSON_TRUNCATED/);
+    assert.equal(response.status, 200);
+    assert.equal(body.degraded, true);
+    assert.equal(body.degradedReason, 'MODEL_JSON_TRUNCATED');
     assert.doesNotMatch(JSON.stringify(body), new RegExp(marker));
 
     await new Promise(resolve => setImmediate(resolve));
@@ -713,9 +711,9 @@ test('报告 JSON 语法子类日志不包含原始解析错误', async () => {
       entry => entry.path === '/api/time-management/report/generate',
     );
 
-    assert.equal(response.status, 502);
-    assert.equal(body.error.code, 'MODEL_OUTPUT_INVALID');
-    assert.equal(body.error.diagnosticCode, undefined);
+    assert.equal(response.status, 200);
+    assert.equal(body.degraded, true);
+    assert.equal(body.degradedReason, 'MODEL_JSON_CONTROL_CHARACTER_INVALID');
     assert.equal(reportEntry.modelOutputReason, 'MODEL_JSON_CONTROL_CHARACTER_INVALID');
     assert.equal(reportEntry.modelAttempts, 2);
     assert.equal(

@@ -1,7 +1,20 @@
 const DEFAULT_TIME_ZONE = 'Asia/Shanghai';
 const EXPLICIT_DUE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/;
-const RELATIVE_DUE_PATTERN = /^(今天|今日|明天|后天)(?:\s*([01]?\d|2[0-3]):([0-5]\d)\s*前?)?$/;
+const RELATIVE_DUE_PATTERN = /^(今天|今日|今晚|今夜|明天|明日|后天)(?:\s*([01]?\d|2[0-3]):([0-5]\d)\s*前?)?$/;
 const URGENCY_SIGNAL = /紧急|立即|马上|尽快|今天必须|今日必须|当天交付|影响当天交付|阻塞/;
+
+// 确定性期限提取（服务端权威，不依赖模型）：
+// 支持 今天/今日/今晚/今夜/明天/明日/后天、18:00前 等时刻、
+// 本周五、本月底/月底；多个期限取最早（最紧迫），无法确定返回 null。
+const RELATIVE_DAY_OFFSETS = Object.freeze({
+  今天: 0, 今日: 0, 今晚: 0, 今夜: 0, 明天: 1, 明日: 1, 后天: 2,
+});
+const WEEKDAY_NAMES = Object.freeze({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 });
+const CLOCK_TIME = /(\d{1,2})[:：](\d{2})/;
+const CN_TIME = /(\d{1,2})点(?:(\d{1,2})分?)?/;
+const DAY_WORD = new RegExp(`(${Object.keys(RELATIVE_DAY_OFFSETS).join('|')})`);
+const WEEK_DAY = /本周([一二三四五六日天])/;
+const MONTH_END = /(?:本月)?(?:底|月底|月末|月底前|月内)/;
 
 function resolveNow(now) {
   const value = typeof now === 'function' ? now() : now;
@@ -107,6 +120,77 @@ function calendarDayDistance(fromDate, toDate) {
   return Math.round((to.getTime() - from.getTime()) / 86_400_000);
 }
 
+function extractDeadlineFromText(text, context = {}) {
+  if (typeof text !== 'string') return null;
+  const referenceDate = referenceDateInTimeZone(
+    context.now || Date.now,
+    context.timeZone || DEFAULT_TIME_ZONE,
+  );
+  const candidates = [];
+  const push = (date, time, index) => {
+    if (!date) return;
+    candidates.push({ date, time, sortKey: `${date}T${time || '23:59'}`, index });
+  };
+
+  let match;
+  const explicitYear = /(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})[日号]?/g;
+  while ((match = explicitYear.exec(text)) !== null) {
+    const date = `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+    if (isValidCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
+      push(date, null, match.index);
+    }
+  }
+  const monthDay = /(?<!\d)(\d{1,2})月(\d{1,2})[日号]?/g;
+  while ((match = monthDay.exec(text)) !== null) {
+    const year = Number(referenceDate.slice(0, 4));
+    if (isValidCalendarDate(year, Number(match[1]), Number(match[2]))) {
+      push(`${year}-${String(match[1]).padStart(2, '0')}-${String(match[2]).padStart(2, '0')}`, null, match.index);
+    }
+  }
+  const dayWord = new RegExp(DAY_WORD.source, 'g');
+  while ((match = dayWord.exec(text)) !== null) {
+    const offset = RELATIVE_DAY_OFFSETS[match[1]];
+    const after = text.slice(match.index + match[0].length, match.index + match[0].length + 8);
+    const clock = CLOCK_TIME.exec(after);
+    const cn = CN_TIME.exec(after);
+    const timeMatch = clock || cn;
+    push(addCalendarDays(referenceDate, offset), timeMatch ? formatTime(timeMatch) : null, match.index);
+  }
+  const weekDay = new RegExp(WEEK_DAY.source, 'g');
+  while ((match = weekDay.exec(text)) !== null) {
+    const target = WEEKDAY_NAMES[match[1]] % 7; // 周日 → 0
+    const daysAhead = (target - dayOfWeek(referenceDate) + 7) % 7;
+    push(addCalendarDays(referenceDate, daysAhead), null, match.index);
+  }
+  const monthEnd = new RegExp(MONTH_END.source, 'g');
+  while ((match = monthEnd.exec(text)) !== null) {
+    push(monthEndDate(referenceDate), null, match.index);
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : a.index - b.index));
+  return { date: candidates[0].date, time: candidates[0].time };
+}
+
+function formatTime(match) {
+  const hour = Number(match[1]);
+  if (hour > 23) return null;
+  const minute = match[2] != null ? Number(match[2]) : 0;
+  if (minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function dayOfWeek(dateText) {
+  return new Date(`${dateText}T00:00:00.000Z`).getUTCDay();
+}
+
+function monthEndDate(referenceDate) {
+  const year = Number(referenceDate.slice(0, 4));
+  const month = Number(referenceDate.slice(5, 7));
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
+
 function applyDeadlineUrgency(task, context = {}) {
   const parsed = parseDue(task?.due, context);
   const result = {
@@ -144,6 +228,7 @@ function applyDeadlineUrgency(task, context = {}) {
 module.exports = {
   DEFAULT_TIME_ZONE,
   applyDeadlineUrgency,
+  extractDeadlineFromText,
   normalizeDue,
   parseDue,
   parseExplicitDue,

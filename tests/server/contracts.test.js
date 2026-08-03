@@ -11,6 +11,7 @@ const {
   SOURCES,
   TASK_STATUS,
   URGENCY,
+  extractOwnerFromText,
   normalizeDueForWrite,
   normalizeOptionalDue,
   normalizeOptionalOwner,
@@ -227,4 +228,24 @@ test('new writes retain only valid dates or pending', () => {
   assert.equal(normalizeDueForWrite({ due: '' }).due, '待确认');
   assert.equal(normalizeDueForWrite({ due: null }).due, '待确认');
   assert.equal(normalizeDueForWrite({ due: '待确认' }).due, '待确认');
+});
+
+test('extractOwnerFromText：明确提交/负责/完成 识别为责任人', () => {
+  assert.equal(extractOwnerFromText('王芳今天18:00前提交新版排期表'), '王芳');
+  assert.equal(extractOwnerFromText('由研发组负责支付回调日志采集'), '研发组');
+  assert.equal(extractOwnerFromText('李明明天下午完成接口回归方案'), '李明');
+});
+
+test('extractOwnerFromText：提交给/交给 不得识别为责任人', () => {
+  assert.equal(extractOwnerFromText('把排期表提交给王芳确认'), null);
+  assert.equal(extractOwnerFromText('报告今天18:00前提交给王芳'), null);
+  assert.equal(extractOwnerFromText('交给研发组处理'), null);
+});
+
+test('extractOwnerFromText：尚未/已经 等虚词不得误判', () => {
+  assert.equal(extractOwnerFromText('客户投诉复盘尚未完成，需要补充原因和改进措施'), null);
+  assert.equal(extractOwnerFromText('支付回调日志采集已完成'), null);
+  assert.equal(extractOwnerFromText('今天完成新版接口联调'), null);
+  assert.equal(extractOwnerFromText(null), null);
+  assert.equal(extractOwnerFromText(''), null);
 });

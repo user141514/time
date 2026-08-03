@@ -2,6 +2,7 @@ const { readFileSync } = require('node:fs');
 const { performance } = require('node:perf_hooks');
 
 const { SOURCE_TO_CATEGORY } = require('../contracts/time-management');
+const { extractDeadlineFromText } = require('../policies/deadline');
 const { decomposeTasks } = require('../workflows/decompose-tasks');
 const { splitEntries } = require('../workflows/check-intake');
 const { isDirectlyRelatedAuxiliary } = require('../workflows/task-evidence-policy');
@@ -321,7 +322,13 @@ function evaluateSuccessfulCase(testCase, result) {
     if (task.owner !== '待确认' && !sourceText.includes(task.owner)) ownerHallucinations += 1;
     if (task.due !== '待确认') {
       const linked = (taskEvidenceById.get(task.id) || []).map(id => evidenceById.get(id));
-      if (!linked.some(item => item && item.due !== '待确认')) dueHallucinations += 1;
+      const fromEvidence = linked.some(item => item && item.due !== '待确认');
+      // 服务端确定性提取的原文期限与 evidence 同等可信（原文期限 > evidence期限）
+      const fromSourceText = extractDeadlineFromText(sourceText, {
+        now: () => nowForBusinessDate(testCase.businessDate),
+        timeZone: 'Asia/Shanghai',
+      })?.date === task.due;
+      if (!fromEvidence && !fromSourceText) dueHallucinations += 1;
     }
   }
 

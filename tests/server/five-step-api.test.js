@@ -216,3 +216,79 @@ test('零任务返回 422 NO_ACTIONABLE_TASKS', async (t) => {
   assert.equal(response.status, 422);
   assert.equal((await response.json()).error.code, 'NO_ACTIONABLE_TASKS');
 });
+
+test('四栏多行输入：totalLines 按实际行数计算并全流程串联（公网验收场景）', async (t) => {
+  const multiEntries = {
+    昨天: '客户投诉复盘尚未完成，需要补充原因和改进措施，预计1小时。',
+    今天: '王芳今天18:00前提交新版排期表，预计1小时。\n研发组今天完成支付回调日志采集，预计2小时。',
+    明天: '李明明天下午完成接口回归方案，预计1.5小时。',
+    后天: '本月底形成支付系统稳定性改进路线图，预计4小时。',
+  };
+  const evidence = [
+    { id: 'E1', dimension: '昨天', quote: multiEntries.昨天, observation: '客户投诉复盘', kind: 'work', status: 'unfinished', owner: '待确认', due: '待确认' },
+    { id: 'E2', dimension: '今天', quote: multiEntries.今天, observation: '提交新版排期表', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E3', dimension: '今天', quote: multiEntries.今天, observation: '支付回调日志采集', kind: 'work', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E4', dimension: '明天', quote: multiEntries.明天, observation: '接口回归方案', kind: 'goal', status: 'planned', owner: '待确认', due: '待确认' },
+    { id: 'E5', dimension: '后天', quote: multiEntries.后天, observation: '稳定性改进路线图', kind: 'goal', status: 'planned', owner: '待确认', due: '待确认' },
+  ];
+  const multiCoach = {
+    evidence,
+    coachingAnalysis: {
+      yesterday_analysis: { key_problem: claim('基于原文证据形成判断。', ['E1']), gap: claim('证据不足：当前输入未提供该维度信息。'), root_cause: claim('证据不足：当前输入未提供该维度信息。'), management_insight: claim('证据不足：当前输入未提供该维度信息。') },
+      today_focus: { key_work: claim('基于原文证据形成判断。', ['E2']), priority_reason: claim('基于原文证据形成判断。', ['E2']), manager_action: claim('基于原文证据形成判断。', ['E2']), possible_delegation: claim('证据不足：当前输入未提供该维度信息。') },
+      tomorrow_optimization: { management_improvement: claim('证据不足：当前输入未提供该维度信息。'), system_building: claim('证据不足：当前输入未提供该维度信息。'), capability_upgrade: claim('证据不足：当前输入未提供该维度信息。') },
+      future_direction: { long_term_goal: claim('证据不足：当前输入未提供该维度信息。'), organization_capability: claim('证据不足：当前输入未提供该维度信息。'), future_focus: claim('证据不足：当前输入未提供该维度信息。') },
+      connection_analysis: { problem_to_action: claim('证据不足：当前输入未提供该维度信息。'), action_to_optimization: claim('证据不足：当前输入未提供该维度信息。'), optimization_to_future: claim('证据不足：当前输入未提供该维度信息。') },
+      coaching_suggestions: [],
+      overall_insight: claim('基于原文证据形成判断。', ['E1', 'E2', 'E3', 'E4', 'E5']),
+    },
+  };
+  const multiTasks = [
+    { name: '客户投诉复盘', importance: '中', urgency: '高', source: '复盘', due: '待确认', est: '1h', owner: '待确认', acceptanceCriteria: [], nextAction: '', status: 'pending', evidenceIds: ['E1'] },
+    { name: '提交新版排期表', importance: '高', urgency: '高', source: '今天', due: '待确认', est: '1h', owner: '待确认', acceptanceCriteria: [], nextAction: '', status: 'pending', evidenceIds: ['E2'] },
+    { name: '支付回调日志采集', importance: '高', urgency: '高', source: '今天', due: '待确认', est: '2h', owner: '待确认', acceptanceCriteria: [], nextAction: '', status: 'pending', evidenceIds: ['E3'] },
+    { name: '接口回归方案', importance: '高', urgency: '中', source: '短期目标', due: '待确认', est: '1.5h', owner: '待确认', acceptanceCriteria: ['形成可执行方案'], nextAction: '先确认回归范围', status: 'pending', evidenceIds: ['E4'] },
+    { name: '稳定性改进路线图', importance: '高', urgency: '低', source: '中长期', due: '待确认', est: '4h', owner: '待确认', acceptanceCriteria: ['形成路线图'], nextAction: '先梳理现状', status: 'pending', evidenceIds: ['E5'] },
+  ];
+  let modelCalls = 0;
+  const client = await authenticatedClient(t, {
+    completeJson: async ({ responseSchemaName }) => {
+      modelCalls += 1;
+      return responseSchemaName === 'time_coach_analysis_v1'
+        ? multiCoach
+        : { tasks: multiTasks };
+    },
+  });
+  const request = (path, body) => client.request(path, {
+    method: 'POST',
+    csrfToken: client.sessionCsrfToken,
+    body,
+  });
+
+  const intakeResponse = await request('/api/time-management/intake/check', { entries: multiEntries });
+  assert.equal(intakeResponse.status, 200);
+  const intake = await intakeResponse.json();
+  assert.equal(intake.totalLines, 5);
+  assert.deepEqual(intake.lineCounts, { 昨天: 1, 今天: 2, 明天: 1, 后天: 1 });
+
+  const decomposeResponse = await request('/api/time-management/tasks/decompose', { entries: multiEntries });
+  assert.equal(decomposeResponse.status, 200);
+  const decomposed = await decomposeResponse.json();
+  assert.equal(decomposed.tasks.length, 5);
+  // 服务端确定性：今天18:00前 → 当天业务日期；本月底 → 当月最后一天
+  const schedule = decomposed.tasks.find(task => task.name === '提交新版排期表');
+  assert.equal(schedule.due, new Date().toISOString().slice(0, 10));
+  assert.equal(schedule.owner, '王芳');
+  assert.equal(decomposed.tasks.find(task => task.name === '支付回调日志采集').owner, '研发组');
+  assert.equal(decomposed.tasks.find(task => task.name === '接口回归方案').owner, '李明');
+  assert.equal(decomposed.tasks.find(task => task.name === '稳定性改进路线图').due, '2026-08-31');
+
+  const smartResponse = await request('/api/time-management/tasks/smart-check', { tasks: decomposed.tasks });
+  assert.equal(smartResponse.status, 200);
+
+  const distributionResponse = await request('/api/time-management/distribution/diagnose', { tasks: decomposed.tasks });
+  assert.equal(distributionResponse.status, 200);
+  const distribution = await distributionResponse.json();
+  assert.equal(distribution.validTaskCount, 5);
+  assert.equal(distribution.totalMinutes, 570); // 60 + 60 + 120 + 90 + 240
+});

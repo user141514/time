@@ -96,7 +96,8 @@ test('两个同名不同 ID 的任务均被保留', async () => {
 });
 
 test('缺少或重复 taskId 时重试一次后拒绝', async () => {
-  const tasks = [task({ id: 'a' }), task({ id: 'b' })];
+  const tasks = [task({ id: 'a', classificationSource: 'unclassified', importance: null, urgency: null }),
+    task({ id: 'b', classificationSource: 'unclassified', importance: null, urgency: null })];
   for (const invalid of [
     { classifications: [classification(tasks[0])], note: '' },
     {
@@ -155,26 +156,16 @@ test('四象限数值固定为 55、25、15、5', async () => {
   assert.deepEqual(result.quadrants.map(item => item.taskIds), [['q1'], ['q2'], ['q3'], ['q4']]);
 });
 
-test('模型修改已有人工或提取标签时拒绝结果', async () => {
-  const tasks = [task({ id: 'ai' }), task({
-    id: 'manual',
-    importance: '低',
-    urgency: '高',
-    classificationSource: 'manual',
-  })];
-  const invalid = {
-    classifications: [
-      classification(tasks[0], { importance: '中' }),
-      classification(tasks[1], { urgency: '低' }),
-    ],
-    note: '',
-  };
-  const modelClient = queuedModel([invalid, invalid]);
-  await assert.rejects(
-    classifyMatrix({ tasks, modelClient }),
-    error => error.code === 'MODEL_OUTPUT_INVALID',
-  );
-  assert.equal(modelClient.calls.length, 2);
+test('全部已分类时不调用模型，标签与象限由服务端确定性计算', async () => {
+  const tasks = [
+    task({ id: 'ai', importance: '高', urgency: '高', classificationSource: 'ai-extraction' }),
+    task({ id: 'manual', importance: '低', urgency: '高', classificationSource: 'manual' }),
+  ];
+  const modelClient = queuedModel([]);
+  const result = await classifyMatrix({ tasks, modelClient });
+  assert.equal(modelClient.calls.length, 0);
+  assert.deepEqual(result.classifications.map(item => item.taskId), ['ai', 'manual']);
+  assert.deepEqual(result.quadrants.map(item => item.taskIds), [['ai'], [], ['manual'], []]);
 });
 
 test('日期纠偏后的高紧急度进入第一或第三象限且标签保持不变', async () => {

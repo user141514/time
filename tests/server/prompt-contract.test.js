@@ -164,11 +164,11 @@ test('报告不得引用当前列表之外的任务', async () => {
     adjustments: ['每周复盘'],
   };
   const modelClient = model([invalid, invalid]);
-  await assert.rejects(
-    generateReport({ tasks, matrix, goals, modelClient }),
-    (error) => error.code === 'MODEL_OUTPUT_INVALID',
-  );
+  const result = await generateReport({ tasks, matrix, goals, modelClient });
   assert.equal(modelClient.calls.length, 2);
+  assert.equal(result.degraded, true);
+  assert.equal(result.degradedReason, 'REPORT_ORDER_REFERENCE_INVALID');
+  assert.deepEqual(result.order.map(item => item.taskId), ['current']);
 });
 
 test('提示词用例文档分开自动化覆盖与人工模型评测', () => {

@@ -3,12 +3,14 @@ const { performance } = require('node:perf_hooks');
 const {
   CATEGORY_KEYS,
   SOURCE_TO_CATEGORY,
+  dedupeCrossSourceTasks,
+  extractOwnerFromText,
   normalizeDueForWrite,
   normalizeTask,
   parseEstimatedMinutes,
 } = require('../contracts/time-management');
 const { shanghaiBusinessDay } = require('../daily-tracking/business-date');
-const { applyDeadlineUrgency } = require('../policies/deadline');
+const { applyDeadlineUrgency, extractDeadlineFromText } = require('../policies/deadline');
 const { loadVersionedPrompt } = require('../prompts/load-versioned-prompt');
 const { checkIntake, splitEntries } = require('./check-intake');
 const { checkTaskSmart } = require('./check-task-smart');
@@ -390,20 +392,40 @@ function normalizeGeneratedTasks(taskResponse, evidenceResponse, goals, now) {
     now: () => instant,
     timeZone: 'Asia/Shanghai',
   };
-  return taskResponse.tasks.map(candidate => {
+  const byEvidenceId = evidenceMap(evidenceResponse);
+  const lines = linesForEntries(goals);
+  const normalized = taskResponse.tasks.map(candidate => {
+    const primary = byEvidenceId.get(candidate.evidenceIds[0]);
+    const sourceText = goals[SOURCE_TO_CATEGORY[candidate.source]] || '';
     const task = normalizeTask({
       ...candidate,
       classificationSource: 'ai-extraction',
     });
-    const normalized = normalizeDueForWrite(applyDeadlineUrgency(task, {
+    const normalizedTask = normalizeDueForWrite(applyDeadlineUrgency(task, {
       ...deadlineContext,
-      goalText: goals[SOURCE_TO_CATEGORY[task.source]] || '',
+      goalText: sourceText,
     }));
+    // 服务端确定性权威：原文期限 > evidence期限；责任人缺失时由原文兜底提取。
+    // 提取以 evidence 指向的原文行（或含任务名的分句）为作用域，避免跨行借用。
+    const evidenceLine = primary ? lines[primary.dimension]?.[primary.sourceLineIndex] : '';
+    const segment = (evidenceLine || sourceText).split(/[。；;\n]/).find(part => part.includes(task.name));
+    const extractionSource = segment || evidenceLine || sourceText;
+    const extractedDeadline = extractDeadlineFromText(extractionSource, deadlineContext);
+    const grounded = {
+      ...normalizedTask,
+      due: extractedDeadline ? extractedDeadline.date : normalizedTask.due,
+      owner: normalizedTask.owner === '待确认'
+        ? extractOwnerFromText(extractionSource) || normalizedTask.owner
+        : normalizedTask.owner,
+    };
     return {
-      task: normalized,
+      task: grounded,
       evidenceIds: [...candidate.evidenceIds],
     };
   });
+  // 昨天遗留与今天同名行动只保留今天行动（同名同来源保持独立）
+  const keptIds = new Set(dedupeCrossSourceTasks(normalized.map(item => item.task)).map(task => task.id));
+  return normalized.filter(item => keptIds.has(item.task.id));
 }
 
 async function decomposeTasks({
@@ -458,7 +480,10 @@ async function decomposeTasks({
     );
   }
 
-  const tasks = normalized.map(item => item.task);
+  // 昨天遗留与今天同名行动只保留今天行动（同名同来源保持独立）
+  const keptIds = new Set(dedupeCrossSourceTasks(normalized.map(item => item.task)).map(task => task.id));
+  const kept = normalized.filter(item => keptIds.has(item.task.id));
+  const tasks = kept.map(item => item.task);
   const smart = checkTaskSmart({ tasks });
   return {
     intake: {

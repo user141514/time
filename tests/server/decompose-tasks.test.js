@@ -445,3 +445,60 @@ test('versioned prompts expose stable identity, version and content hash', () =>
     tasks,
   );
 });
+
+function todayCoach({ quote = '王芳今天18:00前提交新版排期表。', owner = '待确认', due = '待确认' } = {}) {
+  return {
+    evidence: [{
+      id: 'E1',
+      dimension: '今天',
+      quote,
+      observation: '提交新版排期表',
+      kind: 'work',
+      status: 'planned',
+      owner,
+      due,
+    }],
+    coachingAnalysis: analysisFor(['E1']),
+  };
+}
+
+test('模型遗漏时服务端确定性恢复：王芳今天18:00前 → owner=王芳 due=当天', async () => {
+  const modelClient = queuedModel([
+    todayCoach(),
+    generatedTasks([task({
+      name: '提交新版排期表',
+      source: '今天',
+      due: '待确认',
+      owner: '待确认',
+    })]),
+  ]);
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '王芳今天18:00前提交新版排期表。', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-03T04:00:00.000Z'), // 2026-08-03 上海周一
+  });
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].owner, '王芳');
+  assert.equal(result.tasks[0].due, '2026-08-03');
+});
+
+test('模型给出明确期限时保留模型结果，服务端不覆盖', async () => {
+  const modelClient = queuedModel([
+    todayCoach({ owner: '王芳', due: '今天' }),
+    generatedTasks([task({
+      name: '提交新版排期表',
+      source: '今天',
+      due: '今天',
+      owner: '王芳',
+    })]),
+  ]);
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '王芳今天18:00前提交新版排期表。', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-03T04:00:00.000Z'),
+  });
+
+  assert.equal(result.tasks[0].owner, '王芳');
+  assert.equal(result.tasks[0].due, '2026-08-03');
+});

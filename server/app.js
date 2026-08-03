@@ -314,7 +314,7 @@ function createApp({
   });
   app.post('/api/time-management/report/generate', async (request, response, next) => {
     try {
-      response.json(await generateReport({
+      const result = await generateReport({
         tasks: request.body?.tasks,
         matrix: request.body?.matrix,
         goals: request.body?.goals,
@@ -323,7 +323,14 @@ function createApp({
         requestBody: request.body,
         now,
         ...modelRequestOptions(request, response, logger),
-      }));
+      });
+      if (result?.degraded) {
+        response.locals.modelOutputDiagnostic = {
+          reason: result.degradedReason,
+          attempts: result.degradedAttempts || 2,
+        };
+      }
+      response.json(result);
     } catch (error) {
       if (error?.code === 'MODEL_OUTPUT_INVALID') {
         response.locals.modelOutputDiagnostic = {

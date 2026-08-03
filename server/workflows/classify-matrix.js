@@ -197,6 +197,15 @@ async function classifyMatrix({
   }
   assertInputSemantics(input.tasks);
 
+  // 全部任务已有轻重缓急时直接确定性计算四象限，不调用模型
+  if (input.tasks.every(task => task.classificationSource !== 'unclassified')) {
+    return buildResult(input.tasks.map(task => ({
+      taskId: task.id,
+      importance: task.importance,
+      urgency: task.urgency,
+    })), '');
+  }
+
   const request = {
     system: loadStepPrompt('classify-matrix'),
     user: JSON.stringify({ tasks: input.tasks }),

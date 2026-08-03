@@ -2,6 +2,7 @@ const Ajv = require('ajv');
 
 const {
   CLASSIFICATION_SOURCE,
+  DISTRIBUTION_TARGETS,
   GOAL_KEYS,
   IMPORTANCE,
   SOURCES,
@@ -12,6 +13,7 @@ const {
   normalizeOptionalDue,
   normalizeOptionalOwner,
 } = require('../contracts/time-management');
+const { referenceDateInTimeZone } = require('../policies/deadline');
 const { buildReportPriorityContext } = require('../policies/report-priority');
 const {
   buildReportScheduleContext,
@@ -262,6 +264,127 @@ function assertProtectedGuidance(report, tasks, priorityContext) {
   }
 }
 
+// ---------- 报告证据门禁（阶段2） ----------
+// 每条建议必须有依据，且只能来自：现有任务 / 非空输入维度 / 确定性时间分布事实。
+// 依据由服务端计算并回写，模型无法伪造。
+
+function dueDateOf(task) {
+  return /^(\d{4}-\d{2}-\d{2})/.exec(task?.due)?.[1] || null;
+}
+
+function basisForText(text, { tasks, goals, distribution }) {
+  const task = tasks.find(item => item.name.trim() && text.includes(item.name));
+  if (task) return { type: 'task', taskId: task.id };
+  const facts = [
+    ...(distribution?.diagnosis || []),
+    ...(distribution?.recommendations || []),
+  ];
+  if (facts.some(fact => text.includes(fact))) return { type: 'distribution' };
+  for (const key of GOAL_KEYS) {
+    if (goals[key]?.trim() && text.includes(key)) return { type: 'dimension', dimension: key };
+  }
+  return null;
+}
+
+function rejectionReasonFor(text, context) {
+  if (typeof text !== 'string') return REPORT_OUTPUT_REASON.REPORT_UNATTRIBUTED_SUGGESTION;
+  // 规则1：引用了空的明天或后天目标
+  for (const key of ['明天', '后天']) {
+    if (!context.goals[key]?.trim() && text.includes(key)) {
+      return REPORT_OUTPUT_REASON.REPORT_EMPTY_DIMENSION_REFERENCE;
+    }
+  }
+  // 规则2：建议把任务授权/委派/交办给其现有 owner
+  if (/授权|委派|交办/.test(text)) {
+    const owners = new Set(
+      context.tasks
+        .filter(item => item.owner && item.owner !== '待确认')
+        .map(item => item.owner),
+    );
+    for (const owner of owners) {
+      if (text.includes(owner)) return REPORT_OUTPUT_REASON.REPORT_REASSIGN_TO_EXISTING_OWNER;
+    }
+  }
+  // 规则4：建议修改或推迟当天到期任务，却没有明确依据
+  if (/推迟|延后|取消|暂缓|搁置|修改/.test(text)) {
+    const todayTask = context.tasks.find(item => (
+      dueDateOf(item) === context.businessDate && text.includes(item.name)
+    ));
+    if (todayTask && !EXPLICIT_SCHEDULE.test(text)) {
+      return REPORT_OUTPUT_REASON.REPORT_TODAY_TASK_CHANGED_WITHOUT_BASIS;
+    }
+  }
+  return null;
+}
+
+// 规则3：引用了不存在的任务 → 无依据建议统一拒绝
+function attachBasesAndValidate(report, context) {
+  const order = report.order.map(item => {
+    const reason = rejectionReasonFor(item.reason, context);
+    if (reason) throw reportOutputError(reason);
+    return {
+      ...item,
+      basis: { type: 'task', taskId: item.taskId },
+    };
+  });
+  const attach = (items) => items.map((text) => {
+    const reason = rejectionReasonFor(text, context);
+    if (reason) throw reportOutputError(reason);
+    const basis = basisForText(text, context);
+    if (!basis) throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_UNATTRIBUTED_SUGGESTION);
+    return { text, basis };
+  });
+  return {
+    order,
+    energyRules: attach(report.energyRules),
+    adjustments: attach(report.adjustments),
+  };
+}
+
+// ---------- 确定性基础报告（阶段2.3/6） ----------
+// 模型失败或超时时立即返回；只使用任务事实、分布诊断与空栏确认，不编造。
+function buildBaseReport(input, priorityContext) {
+  const taskById = new Map(input.tasks.map(task => [task.id, task]));
+  const order = priorityContext.recommendedTaskIds.map(taskId => {
+    const task = taskById.get(taskId);
+    const parts = [];
+    if (dueDateOf(task)) parts.push(`${dueDateOf(task)} 前完成`);
+    if (task.owner && task.owner !== '待确认') parts.push(`责任人 ${task.owner}`);
+    if (!parts.length) {
+      parts.push(`按 ${priorityContext.actionByTaskId[taskId] || '当前优先级'} 推进`);
+    }
+    return {
+      taskId,
+      reason: parts.join('，'),
+      basis: { type: 'task', taskId },
+    };
+  });
+
+  const targetText = {
+    昨天: '“昨天”遗留应趋近 0%，集中清理或授权，阻止继续滚存。',
+    今天: `“今天”投入保持在 ${DISTRIBUTION_TARGETS.今天.min}–${DISTRIBUTION_TARGETS.今天.max}% 目标区间，优先完成当日到期事项。`,
+    明天: `“明天”投入 ${DISTRIBUTION_TARGETS.明天.min}–${DISTRIBUTION_TARGETS.明天.max}%，为机制、流程和团队能力建设预留不可挤占时段。`,
+    后天: `“后天”布局 ${DISTRIBUTION_TARGETS.后天.min}% 以上，为未来规划预留提前量。`,
+  };
+  const energyRules = GOAL_KEYS
+    .filter(key => input.goals[key]?.trim())
+    .map(key => ({ text: targetText[key], basis: { type: 'distribution' } }));
+
+  const adjustments = (input.distribution?.recommendations || []).map(text => ({
+    text,
+    basis: { type: 'distribution' },
+  }));
+  for (const key of GOAL_KEYS) {
+    if (!input.goals[key]?.trim()) {
+      adjustments.push({
+        text: `当前没有填写${key}事项，可确认是否需要补充。`,
+        basis: { type: 'empty_dimension', dimension: key },
+      });
+    }
+  }
+  return { order, energyRules, adjustments };
+}
+
 function assertReportSemantics(report, tasks, goals, priorityContext) {
   const taskIds = new Set(tasks.map(task => task.id));
   const orderIds = report.order.map(item => item.taskId);
@@ -342,6 +465,23 @@ async function generateReport({
     now: now || Date.now,
     timeZone: 'Asia/Shanghai',
   });
+  const businessDate = referenceDateInTimeZone(now || Date.now, 'Asia/Shanghai');
+  const evidenceContext = {
+    tasks: input.tasks,
+    goals: input.goals,
+    distribution: input.distribution,
+    businessDate,
+  };
+
+  // 客户端"使用基础报告"：不调用模型，直接返回确定性基础报告
+  if (rawInput?.baseOnly) {
+    return {
+      ...buildBaseReport(input, priorityContext),
+      degraded: true,
+      degradedReason: 'CLIENT_REQUESTED_BASE',
+      degradedAttempts: 0,
+    };
+  }
 
   const modelInput = { ...input, priorityContext, scheduleContext };
   let retryFeedback;
@@ -365,7 +505,9 @@ async function generateReport({
         throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_SCHEMA_INVALID);
       }
       assertReportSemantics(report, input.tasks, input.goals, priorityContext);
-      if (!hasScheduleConflict(report, scheduleContext)) return report;
+      if (!hasScheduleConflict(report, scheduleContext)) {
+        return attachBasesAndValidate(report, evidenceContext);
+      }
 
       if (attempt < 2) {
         throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_SCHEDULE_CONFLICT);
@@ -384,7 +526,7 @@ async function generateReport({
       if (hasScheduleConflict(stabilized, scheduleContext)) {
         throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_SCHEDULE_CONFLICT);
       }
-      return stabilized;
+      return attachBasesAndValidate(stabilized, evidenceContext);
     } catch (error) {
       const normalized = normalizeModelError(error);
       normalized.modelAttempts = attempt;
@@ -392,7 +534,13 @@ async function generateReport({
         retryFeedback = retryFeedbackFor(normalized.diagnosticCode);
         continue;
       }
-      throw normalized;
+      // 模型失败、输出违规或超时：不阻塞主流程，返回确定性基础报告
+      return {
+        ...buildBaseReport(input, priorityContext),
+        degraded: true,
+        degradedReason: normalized.diagnosticCode || normalized.code || 'MODEL_ERROR',
+        degradedAttempts: attempt,
+      };
     }
   }
   throw reportOutputError(REPORT_OUTPUT_REASON.REPORT_SCHEMA_INVALID);

@@ -994,3 +994,37 @@ for (const unfinishedCue of [
     assert.equal(modelClient.calls.length, 1);
   });
 }
+
+test('单行三个并列事项拆为三条独立任务', async () => {
+  const modelClient = queuedModel([directTasks([
+    { name: '校对方案' },
+    { name: '跟进投诉', importance: '高' },
+    { name: '回写记录', urgency: '低' },
+  ])]);
+  const input = goals({ 今天: '①校对方案；②跟进投诉；③回写记录' });
+
+  const result = await extractTasks({ goals: input, modelClient });
+  assert.deepEqual(result.tasks.map((task) => task.name), ['校对方案', '跟进投诉', '回写记录']);
+  assert.equal(new Set(result.tasks.map(task => task.id)).size, 3);
+});
+
+test('重复的昨天遗留与今天行动只生成一条任务', async () => {
+  const modelClient = queuedModel([directTasks([
+    { name: '完成支付回调日志采集', source: '复盘' },
+    { name: '完成支付回调日志采集', source: '今天' },
+  ])]);
+  const input = goals({ 昨天: '支付回调日志采集尚未完成', 今天: '完成支付回调日志采集' });
+
+  const result = await extractTasks({ goals: input, modelClient });
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].source, '今天');
+});
+
+test('同名同来源任务不按名称去重', async () => {
+  const result = await extractTasks({
+    goals: goals({ 今天: '分别向两个对象提交方案' }),
+    modelClient: queuedModel([directTasks([{}, {}])]),
+  });
+  assert.equal(result.tasks.length, 2);
+  assert.notEqual(result.tasks[0].id, result.tasks[1].id);
+});
