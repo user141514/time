@@ -23,20 +23,39 @@
 
 - Windows PowerShell
 - Anaconda 或 Miniconda
-- Node.js 20（本项目已验证 Node.js 20.20.2）
+- Node.js 20.20.2（精确版本；安装与 CI 均会拒绝其他版本）
 - Chromium（由 Playwright 安装）
 
-为避免污染其他项目，推荐使用项目目录内的专用 Anaconda 环境 `.conda`：
+仓库通过 `.nvmrc`、`.node-version`、`package.json#engines`、Volta 和 `.npmrc` 统一固定 Node.js `20.20.2`。推荐在 Windows 使用 Volta；进入项目目录后会自动选择正确版本：
 
 ```powershell
-conda create --prefix .\.conda -c conda-forge python=3.12 nodejs=20 -y
+volta install node@20.20.2
+node --version
+npm.cmd run check:node
+npm.cmd ci
+```
+
+使用 NVM/NVM for Windows 时：
+
+```powershell
+nvm install 20.20.2
+nvm use 20.20.2
+npm.cmd run check:node
+npm.cmd ci
+```
+
+也可继续使用项目目录内的专用 Anaconda 环境 `.conda`：
+
+```powershell
+conda create --prefix .\.conda -c conda-forge python=3.12 nodejs=20.20.2 -y
 conda activate .\.conda
+npm.cmd run check:node
 npm.cmd ci
 $env:PLAYWRIGHT_BROWSERS_PATH = '0'
 npx.cmd playwright install chromium
 ```
 
-`.conda/`、`.conda-pkgs/`、`.npm-cache/`、`node_modules/` 和测试产物均已加入 `.gitignore`。
+Node 版本不匹配时，`npm install`/`npm ci` 会直接失败，不会在错误运行时下重建原生依赖。`.conda/`、`.conda-pkgs/`、`.npm-cache/`、`node_modules/` 和测试产物均已加入 `.gitignore`。
 
 ## 服务端配置
 

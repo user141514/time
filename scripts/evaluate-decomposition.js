@@ -1,5 +1,6 @@
 const path = require('node:path');
 
+const { loadModelConfig } = require('../server/config');
 const { createModelClient } = require('../server/model/model-client');
 const {
   loadJsonl,
@@ -39,24 +40,28 @@ function loadLocalEnv() {
   }
 }
 
-function requireEnvironment(name) {
-  const value = String(process.env[name] || '').trim();
-  if (!value) throw new Error(`Missing required environment variable for live evaluation: ${name}`);
-  return value;
+function createLiveEvaluationContext({
+  environment = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const config = loadModelConfig(environment);
+  return Object.freeze({
+    diagnostics: Object.freeze({
+      modelName: config.modelName,
+      responseFormatMode: config.modelResponseFormatMode,
+    }),
+    modelClient: createModelClient({ ...config, fetchImpl }),
+    requestOptions: Object.freeze({
+      responseFormatMode: config.modelResponseFormatMode,
+      maxTokens: config.modelTaskMaxOutputTokens,
+      taskRouteBudgetMs: config.modelTaskRouteBudgetMs,
+    }),
+  });
 }
 
-function createLiveModelClient() {
+function loadLiveEvaluationContext() {
   loadLocalEnv();
-  const timeout = Number(process.env.MODEL_TIMEOUT_MS || 30_000);
-  if (!Number.isInteger(timeout) || timeout < 1) {
-    throw new Error('MODEL_TIMEOUT_MS must be a positive integer');
-  }
-  return createModelClient({
-    modelApiBaseUrl: requireEnvironment('MODEL_API_BASE_URL'),
-    modelApiKey: requireEnvironment('MODEL_API_KEY'),
-    modelName: requireEnvironment('MODEL_NAME'),
-    modelTimeoutMs: timeout,
-  });
+  return createLiveEvaluationContext();
 }
 
 function percent(value) {
@@ -98,14 +103,17 @@ async function main() {
     if (missing.length) throw new Error(`Unknown case IDs: ${missing.join(', ')}`);
   }
 
-  const liveModelClient = options.mode === 'live' ? createLiveModelClient() : null;
+  const liveContext = options.mode === 'live' ? loadLiveEvaluationContext() : null;
   if (options.mode === 'live' && !options.json) {
-    process.stdout.write('注意：live 模式会调用当前配置的真实模型供应商并产生实际请求。\n');
+    process.stdout.write(
+      `注意：live 模式会调用当前配置的真实模型供应商并产生实际请求。模型=${liveContext.diagnostics.modelName}，响应模式=${liveContext.diagnostics.responseFormatMode}。\n`,
+    );
   }
   const report = await runEvaluation({
     cases,
     mode: options.mode,
-    liveModelClient,
+    liveModelClient: liveContext?.modelClient || null,
+    liveRequestOptions: liveContext?.requestOptions,
   });
 
   if (options.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -114,7 +122,15 @@ async function main() {
   if (options.failOnRegression && report.summary.failed > 0) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  process.stderr.write(`Decomposition evaluation failed: ${error.message}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`Decomposition evaluation failed: ${error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  createLiveEvaluationContext,
+  loadLiveEvaluationContext,
+  parseArgs,
+};

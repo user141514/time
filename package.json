@@ -2,7 +2,15 @@
   "name": "time-management-agent-prototype",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "20.20.2"
+  },
+  "volta": {
+    "node": "20.20.2"
+  },
   "scripts": {
+    "check:node": "node scripts/check-node-version.js",
+    "preinstall": "npm run check:node",
     "dev": "node scripts/start-dev.js",
     "migrate": "node scripts/migrate.js",
     "backup:database": "node scripts/backup-database.js",

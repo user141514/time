@@ -1,0 +1,22 @@
+name: Node runtime contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run check:node
+      - run: node --test tests/server/dependency-compatibility.test.js tests/server/evaluate-decomposition-script.test.js tests/server/decomposition-evaluator.test.js

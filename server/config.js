@@ -33,7 +33,7 @@ function enumValue(environment, key, fallback, allowed) {
   return value;
 }
 
-function loadConfig(environment = {}) {
+function loadModelConfig(environment = {}) {
   const modelApiBaseUrl = requiredText(environment, 'MODEL_API_BASE_URL');
   let parsedUrl;
   try {
@@ -45,21 +45,7 @@ function loadConfig(environment = {}) {
     throw configError('MODEL_API_BASE_URL must be an absolute HTTP(S) URL');
   }
 
-  const sessionSecret = requiredText(environment, 'SESSION_SECRET');
-  if (Buffer.byteLength(sessionSecret, 'utf8') < 48) {
-    throw configError('SESSION_SECRET must contain at least 48 bytes');
-  }
-  const sessionMaxAgeMs = positiveInteger(
-    environment.SESSION_MAX_AGE_MS,
-    'SESSION_MAX_AGE_MS',
-    604_800_000,
-  );
-  if (sessionMaxAgeMs !== 604_800_000) {
-    throw configError('SESSION_MAX_AGE_MS must be 604800000');
-  }
-
   return Object.freeze({
-    port: positiveInteger(environment.PORT, 'PORT', 4174, 65535),
     modelApiBaseUrl: modelApiBaseUrl.replace(/\/+$/, ''),
     modelApiKey: requiredText(environment, 'MODEL_API_KEY'),
     modelName: requiredText(environment, 'MODEL_NAME'),
@@ -98,6 +84,27 @@ function loadConfig(environment = {}) {
       8_192,
       65_536,
     ),
+  });
+}
+
+function loadConfig(environment = {}) {
+  const modelConfig = loadModelConfig(environment);
+  const sessionSecret = requiredText(environment, 'SESSION_SECRET');
+  if (Buffer.byteLength(sessionSecret, 'utf8') < 48) {
+    throw configError('SESSION_SECRET must contain at least 48 bytes');
+  }
+  const sessionMaxAgeMs = positiveInteger(
+    environment.SESSION_MAX_AGE_MS,
+    'SESSION_MAX_AGE_MS',
+    604_800_000,
+  );
+  if (sessionMaxAgeMs !== 604_800_000) {
+    throw configError('SESSION_MAX_AGE_MS must be 604800000');
+  }
+
+  return Object.freeze({
+    port: positiveInteger(environment.PORT, 'PORT', 4174, 65535),
+    ...modelConfig,
     databasePath: requiredText(environment, 'DATABASE_PATH'),
     sessionSecret,
     sessionCookieSecure: requiredBoolean(environment, 'SESSION_COOKIE_SECURE'),
@@ -105,4 +112,4 @@ function loadConfig(environment = {}) {
   });
 }
 
-module.exports = { loadConfig };
+module.exports = { loadConfig, loadModelConfig };

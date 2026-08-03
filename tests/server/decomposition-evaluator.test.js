@@ -58,6 +58,49 @@ test('模拟模型多生成一条合法任务时评测器报告精确率下降�
   assert.deepEqual(report.summary.failures[0].failures, ['UNEXPECTED_TASKS']);
 });
 
+test('live 评测器向模型请求透传生产约束', async () => {
+  const base = loadJsonl(DATASET).find(item => item.id === 'D001');
+  const combined = buildReplayEvidenceTaskResponse(base);
+  const calls = [];
+  const modelClient = {
+    async completeJson(input) {
+      calls.push(input);
+      return clone(combined);
+    },
+  };
+
+  const report = await runEvaluation({
+    cases: [base],
+    mode: 'live',
+    liveModelClient: modelClient,
+    liveRequestOptions: {
+      responseFormatMode: 'json_object',
+      maxTokens: 12_000,
+      taskRouteBudgetMs: 32_000,
+      monotonicNow: () => 1_000,
+    },
+  });
+
+  assert.equal(report.summary.passed, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].responseFormatMode, 'json_object');
+  assert.equal(calls[0].maxTokens, 12_000);
+  assert.equal(calls[0].deadlineAt, 33_000);
+});
+
+test('live 评测器拒绝无效请求约束', async () => {
+  const base = loadJsonl(DATASET).find(item => item.id === 'D001');
+  await assert.rejects(
+    () => runEvaluation({
+      cases: [base],
+      mode: 'live',
+      liveModelClient: { async completeJson() {} },
+      liveRequestOptions: { responseFormatMode: 'xml' },
+    }),
+    /responseFormatMode is invalid/,
+  );
+});
+
 test('模拟模型编造证据原文时流水线拒绝且评测器记录非预期模型错误', async () => {
   const base = loadJsonl(DATASET).find(item => item.id === 'D001');
   const combined = buildReplayEvidenceTaskResponse(base);

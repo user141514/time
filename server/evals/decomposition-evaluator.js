@@ -1,4 +1,5 @@
 const { readFileSync } = require('node:fs');
+const { performance } = require('node:perf_hooks');
 
 const { SOURCE_TO_CATEGORY } = require('../contracts/time-management');
 const { decomposeTasks } = require('../workflows/decompose-tasks');
@@ -462,10 +463,46 @@ function summarize(caseResults, mode) {
   };
 }
 
-async function runEvaluation({ cases, mode = 'replay', liveModelClient = null } = {}) {
+function normalizeLiveRequestOptions(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new Error('liveRequestOptions must be an object');
+  }
+  const monotonicNow = options.monotonicNow || (() => performance.now());
+  if (typeof monotonicNow !== 'function') {
+    throw new Error('liveRequestOptions.monotonicNow must be a function');
+  }
+  for (const key of ['maxTokens', 'taskRouteBudgetMs']) {
+    const value = options[key];
+    if (value != null && (!Number.isInteger(value) || value < 1)) {
+      throw new Error(`liveRequestOptions.${key} must be a positive integer`);
+    }
+  }
+  if (
+    options.responseFormatMode != null
+    && !['auto', 'json_schema', 'json_object'].includes(options.responseFormatMode)
+  ) {
+    throw new Error('liveRequestOptions.responseFormatMode is invalid');
+  }
+  return Object.freeze({
+    maxTokens: options.maxTokens,
+    monotonicNow,
+    responseFormatMode: options.responseFormatMode,
+    taskRouteBudgetMs: options.taskRouteBudgetMs,
+  });
+}
+
+async function runEvaluation({
+  cases,
+  mode = 'replay',
+  liveModelClient = null,
+  liveRequestOptions,
+} = {}) {
   if (!Array.isArray(cases) || !cases.length) throw new Error('Evaluation cases are required');
   if (!['replay', 'live'].includes(mode)) throw new Error(`Unknown evaluation mode: ${mode}`);
   if (mode === 'live' && !liveModelClient) throw new Error('liveModelClient is required in live mode');
+  const liveOptions = mode === 'live'
+    ? normalizeLiveRequestOptions(liveRequestOptions)
+    : null;
 
   const caseResults = [];
   for (const testCase of cases) {
@@ -473,10 +510,17 @@ async function runEvaluation({ cases, mode = 'replay', liveModelClient = null } 
     let result = null;
     let error = null;
     try {
+      const deadlineAt = liveOptions?.taskRouteBudgetMs == null
+        ? undefined
+        : liveOptions.monotonicNow() + liveOptions.taskRouteBudgetMs;
       result = await decomposeTasks({
         entries: testCase.entries,
         modelClient,
         now: () => nowForBusinessDate(testCase.businessDate),
+        monotonicNow: liveOptions?.monotonicNow,
+        deadlineAt,
+        responseFormatMode: liveOptions?.responseFormatMode,
+        maxTokens: liveOptions?.maxTokens,
       });
     } catch (caught) {
       error = caught;
