@@ -108,7 +108,7 @@ async function checkGoals({
 
   const validatedGoals = input.goals;
   const request = {
-    system: loadStepPrompt('check-goals'),
+    system: await loadStepPrompt('check-goals'),
     user: JSON.stringify({ goals: validatedGoals }),
     temperature: 0.2,
     maxAttempts: 1,

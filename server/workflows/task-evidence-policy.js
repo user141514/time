@@ -7,6 +7,9 @@ const SOURCE_FOR_DIMENSION = Object.freeze({
 
 const ACTIONABLE_EVIDENCE_STATUSES = Object.freeze(new Set(['planned', 'unfinished']));
 const NON_ACTIONABLE_EVIDENCE_STATUSES = Object.freeze(new Set(['completed', 'not_actionable']));
+// ponytail: hardcoded Chinese stop-word list for n-gram overlap filtering.
+// Domain-specific terms that happen to match these tokens will be silently excluded.
+// Replace with a configurable list or per-tenant override if false negatives appear.
 const RELATION_STOP_TOKENS = Object.freeze(new Set([
   '今天', '明天', '昨天', '后天', '上午', '下午', '晚上', '目前', '已经', '还有',
   '完成', '任务', '工作', '计划', '继续', '进行', '需要', '相关', '事项', '项目',

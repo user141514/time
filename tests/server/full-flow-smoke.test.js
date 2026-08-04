@@ -115,7 +115,7 @@ test('全流程冒烟：认证、五步、历史和每日跟踪全部串联', as
 
   assert.equal(calls.filter(call => call.responseSchemaName === 'time_evidence_atomization_v1').length, 1);
   assert.equal(calls.filter(call => call.responseSchemaName === 'time_reconciliation_v1').length, 1);
-  assert.equal(calls.filter(call => call.responseSchemaName?.startsWith('time_critic_')).length, 5);
+  assert.equal(calls.filter(call => call.responseSchemaName === 'time_critic_combined_v1').length, 1);
   assert.equal(calls.filter(call => call.responseSchemaName === 'time_coaching_analysis_v2').length, 1);
   assert.equal(calls.filter(call => call.responseSchemaName === 'time_classify_matrix_v2').length, 1);
   assert.equal(result.decomposed.tasks.length, 1);

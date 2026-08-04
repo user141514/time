@@ -1,6 +1,7 @@
 const { performance } = require('node:perf_hooks');
 const { loadVersionedPrompt } = require('../prompts/load-versioned-prompt');
 const { splitEntries } = require('./check-intake');
+const { publicError, outputError, normalizeModelError, canRetry } = require('./agent-error-utils');
 const {
   EVIDENCE_RESPONSE_SCHEMA,
   assertFactAtomTrace,
@@ -10,41 +11,6 @@ const {
 
 const PROMPT_ID = 'decomposition.evidence-agent';
 const STAGE = 'evidence-agent';
-
-function publicError(code, message, status) {
-  return Object.assign(new Error(message), { code, status, expose: true });
-}
-
-function outputError(stage, failedRules = []) {
-  return Object.assign(
-    publicError('MODEL_OUTPUT_INVALID', 'AI 返回格式异常，请重试。', 502),
-    { stage, failedRules },
-  );
-}
-
-function normalizeModelError(error, stage) {
-  if (error.code === 'MODEL_OUTPUT_INVALID') {
-    return Object.assign(outputError(stage), { diagnosticCode: error.diagnosticCode });
-  }
-  if (error.code === 'MODEL_TIMEOUT') {
-    return publicError('MODEL_TIMEOUT', 'AI 响应超时，请重试。', 504);
-  }
-  if (error.code === 'MODEL_CANCELLED') {
-    return publicError('REQUEST_CANCELLED', '请求已取消。', 499);
-  }
-  if ([
-    'MODEL_UPSTREAM_ERROR',
-    'MODEL_RESPONSE_ENVELOPE_TOO_LARGE',
-    'MODEL_ERROR_BODY_TOO_LARGE',
-  ].includes(error.code)) {
-    return publicError('MODEL_UPSTREAM_ERROR', 'AI 服务暂时不可用，请稍后重试。', 502);
-  }
-  return error;
-}
-
-function canRetry(deadlineAt, monotonicNow) {
-  return !Number.isFinite(deadlineAt) || deadlineAt - monotonicNow() >= 2_000;
-}
 
 function plainTextMapping(source) {
   const characters = [];

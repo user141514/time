@@ -484,9 +484,12 @@ async function generateReport({
   const modelInput = { ...input, priorityContext, scheduleContext };
   let retryFeedback;
 
+  // ponytail: manual retry loop predates agent-error-utils; modelClient is called
+  // with maxAttempts=1 so the outer loop controls retries independently.
+  // Does NOT check canRetry(deadlineAt) — retries even near the deadline.
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const request = {
-      system: loadStepPrompt('generate-report'),
+      system: await loadStepPrompt('generate-report'),
       user: JSON.stringify(retryFeedback
         ? { ...modelInput, retryFeedback }
         : modelInput),

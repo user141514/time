@@ -27,22 +27,20 @@ const FINDING_SCHEMA = Object.freeze({
 });
 
 // Each focused check returns the same shape as the full response, a subset of its findings
-function checkResponseSchema() {
-  return Object.freeze({
-    type: 'object',
-    additionalProperties: false,
-    required: ['findings'],
-    properties: {
-      findings: { type: 'array', maxItems: CRITIC_FINDING_LIMIT, items: FINDING_SCHEMA },
-    },
-  });
-}
+const CHECK_RESPONSE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['findings'],
+  properties: {
+    findings: { type: 'array', maxItems: CRITIC_FINDING_LIMIT, items: FINDING_SCHEMA },
+  },
+});
 
-const OWNER_CHECK_SCHEMA = checkResponseSchema();     // checks owner hallucinations
-const DUE_CHECK_SCHEMA = checkResponseSchema();       // checks due contamination
-const COVERAGE_CHECK_SCHEMA = checkResponseSchema();  // checks evidence coverage
-const DEDUPE_CHECK_SCHEMA = checkResponseSchema();    // checks duplicate tasks
-const SOURCE_CHECK_SCHEMA = checkResponseSchema();    // checks source alignment
+const OWNER_CHECK_SCHEMA = CHECK_RESPONSE_SCHEMA;
+const DUE_CHECK_SCHEMA = CHECK_RESPONSE_SCHEMA;
+const COVERAGE_CHECK_SCHEMA = CHECK_RESPONSE_SCHEMA;
+const DEDUPE_CHECK_SCHEMA = CHECK_RESPONSE_SCHEMA;
+const SOURCE_CHECK_SCHEMA = CHECK_RESPONSE_SCHEMA;
 
 const CRITIC_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',

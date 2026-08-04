@@ -15,7 +15,7 @@ function mapUser(row) {
 }
 
 function usernameTakenError() {
-  return Object.assign(new Error('That username is already in use.'), {
+  return Object.assign(new Error('该用户名已被使用。'), {
     code: 'AUTH_USERNAME_TAKEN',
   });
 }

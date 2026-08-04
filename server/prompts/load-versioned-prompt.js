@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { readFileSync } = require('node:fs');
+const { readFileSync, realpathSync } = require('node:fs');
 const path = require('node:path');
 
 const DEFINITIONS = Object.freeze({
@@ -47,6 +47,10 @@ const DEFINITIONS = Object.freeze({
     version: '1.0.0',
     relativePath: 'decomposition/critic-source.v1.md',
   }),
+  'decomposition.critic-combined': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-combined.v1.md',
+  }),
 });
 
 const CACHE = new Map();
@@ -62,6 +66,16 @@ function readPrompt(relativePath, stack = []) {
   const relative = path.relative(PROMPT_ROOT, filename);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     throw promptError('prompt include escapes prompt root');
+  }
+  // Guard against symlink escapes (defense-in-depth; prompts come from trusted repo).
+  try {
+    if (realpathSync(filename) !== filename) {
+      throw promptError('prompt include resolves to a different file');
+    }
+  } catch (fsError) {
+    if (fsError.code === 'ENOENT') throw promptError('prompt include does not exist');
+    // realpathSync may fail on network drives or locked files — allow through
+    // and let the readFileSync below catch real errors.
   }
   if (stack.includes(filename)) throw promptError('prompt include cycle');
   const source = readFileSync(filename, 'utf8').trim();

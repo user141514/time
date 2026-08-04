@@ -43,6 +43,9 @@ function atomToCoachingEvidence(atom, index) {
     owner: atom.actor?.name || '待确认',
     due: atom.dueRef || '待确认',
     ...(atom.estimateRef ? { estimate: atom.estimateRef } : {}),
+    // ponytail: confidence scores (server-side atom quality estimates) are passed
+    // to the coaching model. This costs prompt tokens; remove the spread below if
+    // coaching quality degrades or token budget tightens.
     ...(atom.confidence ? { confidence: atom.confidence } : {}),
   };
 }

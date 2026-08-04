@@ -174,7 +174,7 @@ async function extractTasks({
   }
 
   const validatedGoals = input.goals;
-  const system = loadStepPrompt('extract-tasks');
+  const system = await loadStepPrompt('extract-tasks');
   const deadlineContext = {
     now: now || Date.now,
     timeZone: 'Asia/Shanghai',

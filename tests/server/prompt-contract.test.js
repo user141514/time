@@ -246,8 +246,8 @@ test('任务提取提示词定义重要性证据和紧急度分层且不强制�
   assert.match(source, /允许任意象限为空.*不得.*填满.*平均分配/s);
 });
 
-test('步骤 2 只要求顶层 tasks，不含 evidence 术语', () => {
-  const prompt = loadStepPrompt('extract-tasks');
+test('步骤 2 只要求顶层 tasks，不含 evidence 术语', async () => {
+  const prompt = await loadStepPrompt('extract-tasks');
   // 必须包含 tasks 和任务字段
   assert.match(prompt, /"tasks"|"tasks"|tasks/);
   assert.match(prompt, /name/);
@@ -274,16 +274,16 @@ test('步骤 2 只要求顶层 tasks，不含 evidence 术语', () => {
   }
 });
 
-test('步骤 2 明确 owner 不能推断、已完成事实不能生成待办', () => {
-  const prompt = loadStepPrompt('extract-tasks');
+test('步骤 2 明确 owner 不能推断、已完成事实不能生成待办', async () => {
+  const prompt = await loadStepPrompt('extract-tasks');
   assert.match(prompt, /不得.*推断.*责任人/);
   assert.match(prompt, /已完成.*不得.*生成/);
   assert.match(prompt, /待确认/);
 });
 
-test('loadStepPrompt review-task-claims 返回 PROMPT_INVALID', () => {
-  assert.throws(
-    () => loadStepPrompt('review-task-claims'),
+test('loadStepPrompt review-task-claims 返回 PROMPT_INVALID', async () => {
+  await assert.rejects(
+    loadStepPrompt('review-task-claims'),
     (error) => error.code === 'PROMPT_INVALID',
   );
 });

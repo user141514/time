@@ -569,8 +569,6 @@ function containsTaskIdLeak(text, tasks) {
 
 function containsModelArtifacts(texts) {
   const patterns = [
-    /{/,
-    /}/,
     /"model"/i,
     /"prompt"/i,
     /"content"/i,

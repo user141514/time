@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { hardenFactAtoms } = require('../../server/workflows/evidence-hardening');
+const { hardenFactAtoms, hardenFactAtom } = require('../../server/workflows/evidence-hardening');
 
 function atom(overrides = {}) {
   return {
@@ -508,6 +508,138 @@ test('显式行动词存在时问题描述仍可保持任务', () => {
     atom({ quote: '今天排查支付接口报错', action: '排查支付接口报错' }),
     atom({ id: 'atom-2', quote: '修复两个安全漏洞', action: '修复安全漏洞' }),
   ]);
+
+  assert.ok(result.every(item => item.kind === 'work'));
+});
+
+// ---- hardenFactAtom 单原子单元测试：正则冲突场景（锁定当前行为）----
+
+test('已完成与正在处理双信号冲突时 COMPLETED 优先降为 note', () => {
+  // 现状行为：COMPLETED_SIGNAL 在 IN_PROGRESS_SIGNAL 之前判定，
+  // 引语同时命中 “正在处理” 也被整体降为不可行动 note。
+  const result = hardenFactAtom(atom({
+    quote: '已完成前端，正在处理后端',
+    action: '处理',
+    confidence: { actor: 0, due: 0, status: 0 },
+  }));
+
+  assert.equal(result.kind, 'note');
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.action, '');
+});
+
+test('kind=work 时部分完成信号优先于进行中信号标记为未完成', () => {
+  const result = hardenFactAtom(atom({
+    quote: '只完成了部分，正在修复剩余问题',
+    status: 'planned',
+  }));
+
+  assert.equal(result.kind, 'work');
+  assert.equal(result.status, 'unfinished');
+  assert.equal(result.confidence.status, 1);
+});
+
+test('goal 类型下部分完成分支被跳过，且“完成了”先命中已完成信号降为 note', () => {
+  // 已知的 kind 依赖不一致：PARTIAL_COMPLETION_SIGNAL 要求 kind==='work'，
+  // goal 原子跳过部分完成分支；但引语中的 “完成了” 命中 COMPLETED_SIGNAL
+  // （完成+了），在到达 IN_PROGRESS 检查前就被降为 note。
+  const result = hardenFactAtom(atom({
+    kind: 'goal',
+    quote: '只完成了部分，正在修复剩余问题',
+    status: 'planned',
+  }));
+
+  assert.equal(result.kind, 'note');
+  assert.equal(result.status, 'unknown');
+});
+
+test('goal 类型引语不含“完成+了”时可落入进行中判定（对照 fall-through）', () => {
+  // 同一 kind 依赖路径的对照：去掉 “了” 后 COMPLETED_SIGNAL 不再拦截，
+  // IN_PROGRESS_SIGNAL 的 “正在” 生效，得到审计预期的 in_progress。
+  const result = hardenFactAtom(atom({
+    kind: 'goal',
+    quote: '只完成部分，正在修复剩余问题',
+    status: 'planned',
+  }));
+
+  assert.equal(result.status, 'in_progress');
+});
+
+test('否定动作信号吞掉同句的正向动作降为 note', () => {
+  // 现状行为：NEGATED_ACTION_SIGNAL 命中 “不需要…处理” 即整体降级，
+  // 同句中的正向动作 “安排李四完成” 一并丢失。
+  const result = hardenFactAtom(atom({
+    quote: '不需要张三处理，安排李四完成',
+    status: 'planned',
+  }));
+
+  assert.equal(result.kind, 'note');
+  assert.equal(result.action, '');
+});
+
+test('已完成信号先于否定动作信号命中时同样降为 note', () => {
+  // 现状行为（碰巧正确）：COMPLETED_SIGNAL 命中 “已完成”，
+  // 无论与否定动作信号的判定顺序如何，结果均为 note。
+  const result = hardenFactAtom(atom({
+    quote: '不需要额外处理，已完成',
+    status: 'planned',
+  }));
+
+  assert.equal(result.kind, 'note');
+  assert.equal(result.status, 'unknown');
+});
+
+test('正则与模型显式执行者一致时保留模型执行者', () => {
+  const result = hardenFactAtom(atom({
+    quote: '由王芳负责提交报告',
+    actor: { role: 'explicit', name: '王芳' },
+    status: 'planned',
+  }));
+
+  assert.deepEqual(result.actor, { role: 'explicit', name: '王芳' });
+  assert.equal(result.confidence.actor, 1);
+});
+
+test('正则未匹配时模型显式执行者被清除（P0 已知问题）', () => {
+  // 已知问题：EXECUTOR_PATTERNS 只认 “负责/接手/请/提交” 等后续动词，
+  // “王小明在处理” 不匹配任何模式；hardenActor 反而把模型给出的
+  // 正确显式执行者清除为 unknown，丢失任务责任人。
+  const result = hardenFactAtom(atom({
+    quote: '王小明在处理这个事情',
+    actor: { role: 'explicit', name: '王小明' },
+    status: 'planned',
+  }));
+
+  assert.deepEqual(result.actor, { role: 'unknown', name: '' });
+  assert.equal(result.confidence.actor, 0);
+});
+
+// ---- hardenFactAtoms 冒号分组边界用例 ----
+
+test('多冒号行只取第一个冒号：冒号前唯一 work 降为 umbrella note，其余保持 work', () => {
+  // 现状行为：sourceLine.search(/[：:]/) 只取第一个冒号（位置 6），
+  // 第二个冒号（“A：”内）被忽略。冒号前唯一的 “今天需要完成” 被降为
+  // note，冒号后的两个子任务保持 work。
+  const result = hardenFactAtoms([
+    atom({ quote: '今天需要完成' }),
+    atom({ id: 'atom-2', quote: 'A：前端页面优化' }),
+    atom({ id: 'atom-3', quote: 'B：后端接口重构' }),
+  ], ['今天需要完成：A：前端页面优化，B：后端接口重构']);
+
+  assert.equal(result[0].kind, 'note');
+  assert.equal(result[0].status, 'unknown');
+  assert.equal(result[1].kind, 'work');
+  assert.equal(result[2].kind, 'work');
+});
+
+test('所有 work 都在冒号之后时 beforeColon 为空，跳过冒号分组逻辑', () => {
+  // beforeColon.length === 0，触发 beforeColon.length !== 1 守卫，
+  // 整个冒号分组块被跳过，3 个原子全部保持 work（正确行为）。
+  const result = hardenFactAtoms([
+    atom({ quote: '整理文档' }),
+    atom({ id: 'atom-2', quote: '同步进度' }),
+    atom({ id: 'atom-3', quote: '回复邮件' }),
+  ], ['A、B、C：整理文档，同步进度，回复邮件']);
 
   assert.ok(result.every(item => item.kind === 'work'));
 });

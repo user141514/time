@@ -463,7 +463,7 @@ test('上游 HTTP 失败返回稳定错误且不重试', async () => {
   assert.equal(calls, 1);
 });
 
-test('提示词加载器只返回指定步骤的唯一代码块', () => {
+test('提示词加载器只返回指定步骤的唯一代码块', async () => {
   const { loadStepPrompt } = require('../../server/prompts/load-step-prompt');
   const expectations = {
     'check-goals': ['目标梳理审查模块', '任务拆解模块'],
@@ -473,13 +473,13 @@ test('提示词加载器只返回指定步骤的唯一代码块', () => {
   };
 
   for (const [stepName, [included, excluded]] of Object.entries(expectations)) {
-    const prompt = loadStepPrompt(stepName);
+    const prompt = await loadStepPrompt(stepName);
     assert.match(prompt, new RegExp(included));
     assert.doesNotMatch(prompt, new RegExp(excluded));
     assert.doesNotMatch(prompt, /```/);
   }
-  assert.throws(
-    () => loadStepPrompt('unknown-step'),
+  await assert.rejects(
+    loadStepPrompt('unknown-step'),
     error => error.code === 'PROMPT_INVALID',
   );
 });

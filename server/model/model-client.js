@@ -133,6 +133,8 @@ function createModelClient({
   function responseFormats(responseSchema, responseSchemaName, requestedMode) {
     const mode = normalizeResponseFormatMode(requestedMode ?? configuredMode);
     const jsonObject = { type: 'json_object' };
+    // ponytail: re-probe json_schema every 50 calls in case the provider upgraded.
+    // One extra failure per 50 calls is cheap insurance against permanent degradation.
     if (cachedAutoMode === 'json_object' && cachedAutoModeCallCount >= 50) {
       cachedAutoMode = undefined;
       cachedAutoModeCallCount = 0;

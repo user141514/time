@@ -72,6 +72,7 @@ function evidenceOnlyModel(byDimension = {}, opts = {}) {
 
 // 按 responseSchemaName 分派 5 路 critic 检查的模型客户端：
 // byCheck 值为 'timeout' 时模拟 MODEL_TIMEOUT，为函数时以检查输入构造 findings
+// Combined critic uses a single call; the function receives the full combined input.
 function criticAwareModel({ byDimension = {}, byCheck = {}, reconciliation = 'ok' } = {}) {
   const calls = [];
   return {
@@ -90,8 +91,8 @@ function criticAwareModel({ byDimension = {}, byCheck = {}, reconciliation = 'ok
         }
         return { clusters: [], conflicts: [] };
       }
-      if (request.responseSchemaName?.startsWith('time_critic_')) {
-        const behavior = byCheck[request.responseSchemaName];
+      if (request.responseSchemaName === 'time_critic_combined_v1') {
+        const behavior = byCheck.combined;
         if (behavior === 'timeout') {
           const error = new Error('timeout');
           error.code = 'MODEL_TIMEOUT';
@@ -1911,7 +1912,7 @@ test('cluster 编译保留全部 atom lineage 且未完整分类的任务标记�
   ]);
 });
 
-test('单个 critic 检查超时时流水线继续并以 partial 状态返回其余检查结果', async () => {
+test('Critic 调用超时时流水线降级并回退到无 finding 状态', async () => {
   const modelClient = criticAwareModel({
     byDimension: {
       今天: [atom('今天', {
@@ -1921,7 +1922,7 @@ test('单个 critic 检查超时时流水线继续并以 partial 状态返回其
         dueRef: '今天18:00前',
       })],
     },
-    byCheck: { time_critic_dedupe_v1: 'timeout' },
+    byCheck: { combined: 'timeout' },
   });
   const result = await decomposeTasks({
     entries: { 昨天: '', 今天: '今天18:00前提交排期表', 明天: '', 后天: '' },
@@ -1930,19 +1931,16 @@ test('单个 critic 检查超时时流水线继续并以 partial 状态返回其
   });
 
   const criticStage = result.decomposition.stages.find(item => item.name === 'critic');
-  assert.equal(criticStage.status, 'partial');
-  assert.equal(criticStage.output.checkResults.dedupe.ok, false);
-  assert.equal(criticStage.output.checkResults.dedupe.errorCode, 'MODEL_TIMEOUT');
-  assert.equal(criticStage.output.checkResults.owner.ok, true);
-  assert.equal(criticStage.output.governanceStatus, 'accepted');
-  assert.equal(criticStage.attempts, 5);
+  assert.equal(criticStage.status, 'degraded');
+  for (const key of ['owner', 'due', 'coverage', 'dedupe', 'source']) {
+    assert.equal(criticStage.output.checkResults[key].ok, false);
+    assert.equal(criticStage.output.checkResults[key].errorCode, 'MODEL_TIMEOUT');
+  }
   assert.equal(result.tasks.length, 1);
-  // 其余 4 路检查仍被执行
-  assert.deepEqual(
-    new Set(modelClient.calls
-      .filter(call => call.responseSchemaName?.startsWith('time_critic_'))
-      .map(call => call.responseSchemaName)),
-    new Set(['time_critic_owner_v1', 'time_critic_due_v1', 'time_critic_coverage_v1', 'time_critic_dedupe_v1', 'time_critic_source_v1']),
+  // Combined critic makes a single API call
+  assert.equal(
+    modelClient.calls.filter(call => call.responseSchemaName === 'time_critic_combined_v1').length,
+    1,
   );
 });
 
@@ -1958,7 +1956,7 @@ test('critic 对同一任务一票否决一票通过时治理状态反映冲突'
       })],
     },
     byCheck: {
-      time_critic_owner_v1: input => ({
+      combined: input => ({
         findings: [{
           severity: 'blocker',
           category: 'owner_hallucination',
@@ -1977,8 +1975,9 @@ test('critic 对同一任务一票否决一票通过时治理状态反映冲突'
 
   const criticStage = result.decomposition.stages.find(item => item.name === 'critic');
   assert.equal(criticStage.status, 'succeeded');
+  // Combined call returns 1 finding; all check slots share the same meta
   assert.equal(criticStage.output.checkResults.owner.findings, 1);
-  assert.equal(criticStage.output.checkResults.due.findings, 0);
+  assert.equal(criticStage.output.checkResults.due.findings, 1);
   assert.equal(criticStage.output.governanceStatus, 'needs_confirmation');
   assert.equal(result.tasks[0].owner, '待确认');
   // due 检查通过 → 期限保留

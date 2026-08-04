@@ -104,6 +104,8 @@ const coachingAnalysisSchema = {
   },
 };
 
+// V1 coach-analysis schema — used by pipeline version "coach-decompose-v1".
+// Claim text maxLength is 4000. Distinct from V2 COACHING_RESPONSE_SCHEMA below.
 const COACH_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -196,6 +198,8 @@ const v2EvidenceIdsSchema = {
   maxItems: DECOMPOSITION_ITEM_LIMIT,
   items: { type: 'string', pattern: EVIDENCE_ID_PATTERN },
 };
+// ponytail: maxLength reduced from 4000 (V1) to 240 (V2) — claims should be
+// one-sentence evidence pointers, not paragraph-length model output.
 const v2ClaimSchema = {
   type: 'object',
   additionalProperties: false,
@@ -289,8 +293,8 @@ const EVIDENCE_ITEM_V2_SCHEMA = Object.freeze({
       type: 'string',
       enum: ['completed', 'unfinished', 'planned', 'not_actionable'],
     },
-    owner: { type: 'string', minLength: 1, maxLength: 60 },
-    due: { type: 'string', minLength: 1, maxLength: 40 },
+    owner: { type: 'string', minLength: 0, maxLength: 60 },
+    due: { type: 'string', minLength: 0, maxLength: 40 },
   },
 });
 
@@ -394,6 +398,8 @@ const EVIDENCE_TASK_RESPONSE_SCHEMA = Object.freeze({
   },
 });
 
+// V2 coaching-analysis schema — used by pipeline versions "task-first-v2" and later.
+// Claim text maxLength reduced to 240. Distinct from V1 COACH_RESPONSE_SCHEMA above.
 const COACHING_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,

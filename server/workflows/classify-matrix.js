@@ -211,7 +211,7 @@ async function classifyMatrix({
   }
 
   const request = {
-    system: loadStepPrompt('classify-matrix'),
+    system: await loadStepPrompt('classify-matrix'),
     user: JSON.stringify({ tasks: input.tasks }),
     temperature: 0.2,
     maxAttempts: 1,
@@ -223,6 +223,9 @@ async function classifyMatrix({
     onAttempt,
   };
 
+  // ponytail: manual retry loop predates agent-error-utils; modelClient is called
+  // with maxAttempts=1 so the outer loop controls retries independently.
+  // Does NOT check canRetry(deadlineAt) — retries even near the deadline.
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const output = await modelClient.completeJson(request);

@@ -30,6 +30,9 @@ function createSessionRepository({
     );
     if (!row) return null;
     if (Date.parse(row.expires_at) <= Date.parse(now())) {
+      // ponytail: expired-session cleanup piggybacks on read — avoids a separate
+      // pruning job but means findByToken is not a pure read. If called inside a
+      // transaction, this DELETE participates in it.
       await client.run('DELETE FROM sessions WHERE token_hash = ?', [tokenHash]);
       return null;
     }
@@ -47,6 +50,8 @@ function createSessionRepository({
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(token_hash) DO UPDATE SET
           user_id = excluded.user_id,
+          csrf_token_hash = excluded.csrf_token_hash,
+          expires_at = excluded.expires_at,
           last_seen_at = excluded.last_seen_at`,
         [randomUUID(), userId, tokenHash, csrfTokenHash, timestamp, expiresAt, timestamp],
       );
@@ -62,6 +67,8 @@ function createSessionRepository({
       );
     },
 
+    // ponytail: touch only bumps last_seen_at; rolling:false means expiry is absolute.
+    // If rolling sessions are enabled, pass sessionMaxAgeMs and extend expires_at.
     touch(rawSessionId) {
       const timestamp = now();
       return database.run(

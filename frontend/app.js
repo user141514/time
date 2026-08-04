@@ -92,6 +92,7 @@ let dailySaveInFlight = false;
 let dailySaveQueued = false;
 const COACHING_REQUEST_MAX_BYTES = 64 * 1024;
 const historyWriteChains = new Map();
+const textEncoder = new TextEncoder();
 const historySavePromises = new Map();
 const historyPatchPromises = new Map();
 const app = () => document.getElementById('app');
@@ -1042,7 +1043,7 @@ function handleWorkflowError(error, id) {
 }
 
 function serializedBytes(value) {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  return textEncoder.encode(JSON.stringify(value)).byteLength;
 }
 
 function recordTaskVisible(startedAt, decompositionId) {
@@ -1964,10 +1965,12 @@ document.addEventListener('keydown', event => {
   }
 });
 
+// ponytail: Chrome ignores custom beforeunload messages — shows generic dialog instead.
+// event.returnValue is set for Firefox/Safari compatibility.
 window.addEventListener('beforeunload', event => {
   if (!hasUnsafeDailyChanges()) return;
   event.preventDefault();
-  event.returnValue = '';
+  event.returnValue = '每日跟踪仍有未保存更改，离开后修改将丢失。';
 });
 
 render();

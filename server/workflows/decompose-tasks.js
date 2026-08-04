@@ -45,7 +45,7 @@ function linesForEntries(entries) {
 }
 
 function copy(value) {
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 function normalizeEstimateRef(value) {
@@ -204,23 +204,51 @@ function isAncillaryAction(atom) {
     || /^(?:并)?向.{1,24}(?:汇报|审阅|审核|审批)/u.test(action);
 }
 
+// Atom priority weights: dimension × status ordering for deterministic primary selection.
+// Higher score = more likely to be selected as the canonical task name source.
+const ATOM_SCORE = {
+  TODAY_IN_PROGRESS: 600,
+  TODAY_PLANNED: 550,
+  OTHER_IN_PROGRESS: 500,
+  TOMORROW_PLANNED: 450,
+  DAY_AFTER_PLANNED: 425,
+  OTHER_PLANNED: 400,
+  TODAY_UNFINISHED: 350,
+  OTHER_UNFINISHED: 300,
+  FALLBACK: 100,
+  EXPLICIT_ACTOR_BONUS: 20,
+  DUE_REF_BONUS: 10,
+  ESTIMATE_REF_BONUS: 5,
+  ANCILLARY_PENALTY: -250,
+};
+
 function primaryAtomScore(atom) {
   let score = 0;
-  if (atom.dimension === '今天' && atom.status === 'in_progress') score = 600;
-  else if (atom.dimension === '今天' && atom.status === 'planned') score = 550;
-  else if (atom.status === 'in_progress') score = 500;
-  else if (atom.status === 'planned' && atom.dimension === '明天') score = 450;
-  else if (atom.status === 'planned' && atom.dimension === '后天') score = 425;
-  else if (atom.status === 'planned') score = 400;
-  else if (atom.status === 'unfinished' && atom.dimension === '今天') score = 350;
-  else if (atom.status === 'unfinished') score = 300;
-  else score = 100;
-  if (atom.actor?.role === 'explicit' && atom.actor?.name) score += 20;
-  if (atom.dueRef) score += 10;
-  if (atom.estimateRef) score += 5;
-  if (isAncillaryAction(atom)) score -= 250;
+  if (atom.dimension === '今天' && atom.status === 'in_progress') score = ATOM_SCORE.TODAY_IN_PROGRESS;
+  else if (atom.dimension === '今天' && atom.status === 'planned') score = ATOM_SCORE.TODAY_PLANNED;
+  else if (atom.status === 'in_progress') score = ATOM_SCORE.OTHER_IN_PROGRESS;
+  else if (atom.status === 'planned' && atom.dimension === '明天') score = ATOM_SCORE.TOMORROW_PLANNED;
+  else if (atom.status === 'planned' && atom.dimension === '后天') score = ATOM_SCORE.DAY_AFTER_PLANNED;
+  else if (atom.status === 'planned') score = ATOM_SCORE.OTHER_PLANNED;
+  else if (atom.status === 'unfinished' && atom.dimension === '今天') score = ATOM_SCORE.TODAY_UNFINISHED;
+  else if (atom.status === 'unfinished') score = ATOM_SCORE.OTHER_UNFINISHED;
+  else score = ATOM_SCORE.FALLBACK;
+  if (atom.actor?.role === 'explicit' && atom.actor?.name) score += ATOM_SCORE.EXPLICIT_ACTOR_BONUS;
+  if (atom.dueRef) score += ATOM_SCORE.DUE_REF_BONUS;
+  if (atom.estimateRef) score += ATOM_SCORE.ESTIMATE_REF_BONUS;
+  if (isAncillaryAction(atom)) score += ATOM_SCORE.ANCILLARY_PENALTY;
   return score;
 }
+
+// Relation bonus weights: incoming links lift an atom as a continuation target;
+// outgoing continuation links lower it, since a later continuation is usually the better name source.
+const RELATION_SCORE = {
+  INCOMING_CONTINUATION: 80,
+  INCOMING_DEPENDENCY: 30,
+  INCOMING_SAME_WORK_ITEM: 10,
+  OUTGOING_CONTINUATION: -20,
+  SOLE_CONTINUATION_TARGET_BONUS: 180,
+};
 
 function relationPrimaryBonus(atom, relations = []) {
   let bonus = 0;
@@ -230,16 +258,18 @@ function relationPrimaryBonus(atom, relations = []) {
     if (relation.toAtom === atom.id) {
       if (relation.type === 'continuation') {
         incomingContinuation += 1;
-        bonus += 80;
-      } else if (relation.type === 'dependency') bonus += 30;
-      else if (relation.type === 'same_work_item') bonus += 10;
+        bonus += RELATION_SCORE.INCOMING_CONTINUATION;
+      } else if (relation.type === 'dependency') bonus += RELATION_SCORE.INCOMING_DEPENDENCY;
+      else if (relation.type === 'same_work_item') bonus += RELATION_SCORE.INCOMING_SAME_WORK_ITEM;
     }
     if (relation.fromAtom === atom.id && relation.type === 'continuation') {
       outgoingContinuation += 1;
-      bonus -= 20;
+      bonus += RELATION_SCORE.OUTGOING_CONTINUATION;
     }
   }
-  if (incomingContinuation > 0 && outgoingContinuation === 0) bonus += 180;
+  if (incomingContinuation > 0 && outgoingContinuation === 0) {
+    bonus += RELATION_SCORE.SOLE_CONTINUATION_TARGET_BONUS;
+  }
   return bonus;
 }
 
@@ -250,10 +280,13 @@ function selectPrimaryAtom(workAtoms, relations = []) {
   const candidateRelations = relations.filter(relation => (
     candidateIds.has(relation.fromAtom) && candidateIds.has(relation.toAtom)
   ));
-  return [...candidates].sort((left, right) => (
-    primaryAtomScore(right) + relationPrimaryBonus(right, candidateRelations)
-    - primaryAtomScore(left) - relationPrimaryBonus(left, candidateRelations)
-  ))[0];
+  return [...candidates].sort((left, right) => {
+    const scoreDiff = primaryAtomScore(right) + relationPrimaryBonus(right, candidateRelations)
+      - primaryAtomScore(left) - relationPrimaryBonus(left, candidateRelations);
+    if (scoreDiff !== 0) return scoreDiff;
+    // ponytail: tiebreak on atom.id for deterministic replay; scores are equal.
+    return left.id.localeCompare(right.id, 'en');
+  })[0];
 }
 
 function stripProgressPrefix(value) {

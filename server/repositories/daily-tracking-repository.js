@@ -83,6 +83,9 @@ function createDailyTrackingRepository({
         if (value.revision === 0) {
           const id = randomUUID();
           if (!UUID.test(id)) throw new Error('Daily tracking UUID source returned an invalid result.');
+          // ponytail: DO NOTHING on first-create conflict — two tabs creating the same
+          // day's tracking both succeed but one sees zero changes. The conflictError below
+          // treats this as a generic conflict; the frontend retry will re-read the saved copy.
           result = await transaction.run(
             `INSERT INTO daily_tracking_days (
               id, user_id, tracking_date, tasks_json, tracking_json,

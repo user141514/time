@@ -57,7 +57,7 @@ async function readLimitedBody(response, maxBytes, {
       return Buffer.concat(chunks, totalBytes).toString('utf8');
     } finally {
       signal?.removeEventListener('abort', cancelReader);
-      reader.releaseLock?.();
+      try { reader.releaseLock?.(); } catch { /* already released by cancel */ }
     }
   }
 
@@ -71,6 +71,9 @@ async function readLimitedBody(response, maxBytes, {
 
   if (typeof response?.json === 'function') {
     const payload = await raceWithSignal(response.json(), signal);
+    // ponytail: re-serializing response.json() output may differ from the raw HTTP
+    // body (property order, number precision, whitespace). Acceptable because this
+    // path is only used for size-limit enforcement, not content-addressable storage.
     const text = JSON.stringify(payload);
     if (Buffer.byteLength(text, 'utf8') > maxBytes) {
       throw tooLargeError(tooLargeCode);

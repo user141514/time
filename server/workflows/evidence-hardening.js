@@ -277,6 +277,11 @@ function hardenFactAtoms(atoms, sourceLines = []) {
     }
   }
 
+  // ponytail: colon-grouping assumes at most one colon per line, exactly 1 work
+  // atom before it (the "title"), and ≥2 after it. Multi-colon lines, lines where
+  // the title is after the colon, and duplicate-quote atoms violate these assumptions.
+  // The guards (beforeColon.length !== 1, afterColon.length < 2) skip the entire
+  // block when assumptions don't hold — safe but lossy (dueRef propagation skipped).
   for (const indexes of grouped.values()) {
     const workIndexes = indexes.filter(index => metadataHardened[index].kind === 'work');
     if (workIndexes.length < 3) continue;

@@ -9,6 +9,8 @@ function usernameKey(value) {
   try {
     return normalizeUsername(value);
   } catch {
+    // ponytail: all unparseable usernames share one bucket — blocks rotation attacks
+    // but also buckets legitimate typos together; per-IP fallback if false positives appear
     return 'invalid-username';
   }
 }

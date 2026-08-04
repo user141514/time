@@ -19,6 +19,17 @@ async function main() {
   server.once('error', async () => {
     await runtime.close().catch(() => undefined);
   });
+
+  process.once('SIGTERM', () => shutdown({ signal: 'SIGTERM', server, runtime }));
+  process.once('SIGINT', () => shutdown({ signal: 'SIGINT', server, runtime }));
+}
+
+async function shutdown({ signal, server, runtime }) {
+  process.stderr.write(`Time assistant shutting down (${signal})...\n`);
+  server.closeAllConnections?.();
+  await new Promise((resolve) => server.close(resolve));
+  await runtime.close().catch(() => undefined);
+  process.exitCode = 0;
 }
 
 main().catch((error) => {
