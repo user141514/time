@@ -1,0 +1,164 @@
+{
+  "generatedAt": "2026-08-04",
+  "provenance": {
+    "orchestrator": "Claude Code CLI 2.1.212",
+    "requestedModel": "sonnet",
+    "actualBackendModel": "deepseek-v4-pro[1m]",
+    "modelRoutingNote": "The local Claude Code apiKeyHelper routed all generation and curation calls through a custom provider. These cases were generated through Claude Code CLI orchestration, not by Anthropic Claude Sonnet.",
+    "generatorCount": 8,
+    "casesPerGenerator": 10,
+    "curatorCount": 1
+  },
+  "dataset": {
+    "path": "tests/evals/decomposition-cases-claude80.jsonl",
+    "totalCases": 80,
+    "uniqueIds": 80,
+    "domainCounts": {
+      "A-status-actionability": 10,
+      "B-owner-roles": 10,
+      "C-deadlines": 10,
+      "D-smart-facts": 10,
+      "E-segmentation": 10,
+      "F-reconciliation": 10,
+      "G-future-work": 10,
+      "H-adversarial": 10
+    },
+    "noActionCount": 6,
+    "expectedTaskCount": 101,
+    "expectedEvidenceCount": 139,
+    "multiDimensionCases": 13,
+    "multiTaskCases": 19,
+    "multiEvidenceTaskCases": 12,
+    "explicitOwnerTasks": 11,
+    "explicitDueTasks": 44,
+    "durationTasks": 13,
+    "acceptanceCriteriaTasks": 10,
+    "nextActionTasks": 5,
+    "maxInputCharacters": 111,
+    "nearDuplicatesWithinDataset": 0,
+    "nearDuplicatesAgainstExisting17": 0
+  },
+  "deterministicValidation": {
+    "jsonParseErrors": 0,
+    "duplicateIds": 0,
+    "quoteGroundingErrors": 0,
+    "evidenceIndexErrors": 0,
+    "ungroundedOwnerErrors": 0,
+    "ungroundedDueErrors": 0,
+    "ungroundedAcceptanceErrors": 0,
+    "ungroundedNextActionErrors": 0
+  },
+  "curation": {
+    "correctedCaseCount": 13,
+    "correctedIds": [
+      "C80-C09",
+      "C80-D01",
+      "C80-D02",
+      "C80-D03",
+      "C80-D04",
+      "C80-D07",
+      "C80-D09",
+      "C80-D10",
+      "C80-F02",
+      "C80-F05",
+      "C80-F09",
+      "C80-F10",
+      "C80-G02"
+    ],
+    "correctionCategories": [
+      "add exact estimateRaw source expressions",
+      "normalize 30-minute expected output to 30分钟",
+      "remove unsupported two-week value from task.est",
+      "put active today evidence first in one cross-dimension lineage"
+    ],
+    "generatorScopeViolation": "One generator created tests/evals/claude80/_validate.js despite being instructed to write only its JSONL file. The file is excluded from final artifacts."
+  },
+  "evaluatorAudit": {
+    "defectsFound": [
+      "Replay used normalized task.est as FactAtom estimateRef, violating source-substring grounding.",
+      "Task duration was not scored, so duration loss could pass undetected.",
+      "Replay did not construct explicit owner conflicts.",
+      "Yesterday coverage applied a redundant lexical gate after explicit task lineage was present."
+    ],
+    "regressionTestsAdded": 4,
+    "evaluatorTestsPassing": "11/11"
+  },
+  "replay": {
+    "cases": 80,
+    "passed": 74,
+    "failed": 6,
+    "passRate": 0.925,
+    "taskPrecision": 1,
+    "taskRecall": 1,
+    "remainingFailureIds": [
+      "C80-C10",
+      "C80-D03",
+      "C80-D04",
+      "C80-F02",
+      "C80-F10",
+      "C80-H04"
+    ],
+    "remainingFailureClasses": {
+      "DUE_MISMATCH": 3,
+      "EST_MISMATCH": 3
+    }
+  },
+  "liveDeepSeek": {
+    "cases": 80,
+    "passedStrict": 13,
+    "failedStrict": 67,
+    "strictPassRate": 0.1625,
+    "expectedTasks": 99,
+    "actualTasks": 91,
+    "matchedTasks": 54,
+    "taskPrecision": 0.5934065934,
+    "taskRecall": 0.5454545455,
+    "expectedEvidence": 126,
+    "matchedEvidence": 105,
+    "safety": {
+      "completedLeakage": 0,
+      "ownerHallucinations": 0,
+      "dueHallucinations": 0
+    },
+    "domainPassed": {
+      "A": 0,
+      "B": 1,
+      "C": 4,
+      "D": 0,
+      "E": 2,
+      "F": 2,
+      "G": 2,
+      "H": 2
+    },
+    "failureCodeCounts": {
+      "EVIDENCE_DUE_MISMATCH": 44,
+      "TASK_RECALL_MISS": 35,
+      "EVIDENCE_STATUS_MISMATCH": 34,
+      "UNEXPECTED_TASKS": 33,
+      "EVIDENCE_KIND_MISMATCH": 30,
+      "EVIDENCE_OWNER_MISMATCH": 21,
+      "EVIDENCE_MISSING": 20,
+      "DUE_MISMATCH": 13,
+      "EXPECTED_NO_ACTIONABLE_TASKS_GOT_SUCCESS": 4,
+      "YESTERDAY_ACTIONABLE_NOT_COVERED": 3,
+      "OWNER_MISMATCH": 2,
+      "EST_MISMATCH": 2,
+      "UNEXPECTED_MODEL_OUTPUT_INVALID": 2,
+      "NEXTACTION_MISMATCH": 1
+    },
+    "conditionalMatchedTaskFieldAccuracy": {
+      "source": 1,
+      "owner": 0.962962963,
+      "due": 0.7592592593,
+      "est": 0.962962963,
+      "acceptance": 1,
+      "nextAction": 0.9814814815
+    },
+    "conditionalMatchedEvidenceAccuracy": {
+      "status": 0.7523809524,
+      "kind": 0.8952380952,
+      "owner": 0.9904761905,
+      "due": 0.6666666667
+    }
+  }
+}

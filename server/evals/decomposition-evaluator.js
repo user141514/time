@@ -5,7 +5,6 @@ const { SOURCE_TO_CATEGORY } = require('../contracts/time-management');
 const { extractDeadlineFromText } = require('../policies/deadline');
 const { decomposeTasks } = require('../workflows/decompose-tasks');
 const { splitEntries } = require('../workflows/check-intake');
-const { isDirectlyRelatedAuxiliary } = require('../workflows/task-evidence-policy');
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -172,9 +171,11 @@ function buildReplayAtoms(testCase) {
       : replayTaskForEvidence(testCase, index);
     const sourceLines = splitEntries(testCase.entries[item.dimension]);
     const sourceLineIndex = sourceLines.findIndex(line => line.includes(item.quote));
+    const sourceLine = sourceLines[sourceLineIndex] || '';
     const explicitOwner = item.owner && item.owner !== '待确认';
     const explicitDue = item.dueRaw && item.dueRaw !== '待确认';
-    const estimateRef = linkedTask?.est || '';
+    const estimateRef = item.estimateRaw
+      || (linkedTask?.est && sourceLine.includes(linkedTask.est) ? linkedTask.est : '');
     return {
       id: `E${index + 1}`,
       dimension: item.dimension,
@@ -211,6 +212,7 @@ function buildReplayAtoms(testCase) {
 
 function buildReplayReconciliation(testCase, atoms) {
   const clusters = [];
+  const conflicts = [];
   const assigned = new Set();
   for (const [taskIndex, task] of (testCase.expected.tasks || []).entries()) {
     const atomIds = (task.evidenceIndexes || [])
@@ -225,6 +227,19 @@ function buildReplayReconciliation(testCase, atoms) {
     const linkedAtoms = atomIds.map(id => atoms.find(atom => atom.id === id));
     const hasUnfinished = linkedAtoms.some(atom => atom.status === 'unfinished');
     const hasPlanned = linkedAtoms.some(atom => ['planned', 'in_progress'].includes(atom.status));
+    const explicitOwnerAtoms = linkedAtoms.filter(atom => (
+      atom.actor?.role === 'explicit' && atom.actor?.name
+    ));
+    const explicitOwnerNames = [...new Set(explicitOwnerAtoms.map(atom => atom.actor.name))];
+    const hasOwnerConflict = task.owner === '待确认' && explicitOwnerNames.length > 1;
+    if (hasOwnerConflict) {
+      conflicts.push({
+        atomIds: explicitOwnerAtoms.map(atom => atom.id),
+        field: 'owner',
+        description: '黄金案例包含多个不同明确责任人，需要人工确认。',
+        resolution: 'human_needed',
+      });
+    }
     clusters.push({
       id: `RC${taskIndex + 1}`,
       label: task.name,
@@ -235,9 +250,11 @@ function buildReplayReconciliation(testCase, atoms) {
         type: 'same_work_item',
         rationale: '黄金案例声明这些证据属于同一任务。',
       })),
-      mergedOwner: task.owner && task.owner !== '待确认'
-        ? { name: task.owner, source: 'explicit' }
-        : { name: '', source: 'implied' },
+      mergedOwner: hasOwnerConflict
+        ? { name: '', source: 'conflict' }
+        : (task.owner && task.owner !== '待确认'
+          ? { name: task.owner, source: 'explicit' }
+          : { name: '', source: 'implied' }),
       mergedDueRef: task.dueRaw && task.dueRaw !== '待确认' ? task.dueRaw : '',
       mergedStatus: hasUnfinished && hasPlanned
         ? 'both'
@@ -259,7 +276,7 @@ function buildReplayReconciliation(testCase, atoms) {
       mergedStatus: atom.status === 'unfinished' ? 'unfinished' : 'planned',
     });
   }
-  return { clusters, conflicts: [] };
+  return { clusters, conflicts };
 }
 
 function createReplayModel(testCase) {
@@ -375,6 +392,7 @@ function evaluateSuccessfulCase(testCase, result) {
     source: 0,
     owner: 0,
     due: 0,
+    est: 0,
     importance: 0,
     urgency: 0,
     acceptance: 0,
@@ -386,6 +404,7 @@ function evaluateSuccessfulCase(testCase, result) {
     fieldTotals.source += Number(expected.source === actual.source);
     fieldTotals.owner += Number((expected.owner || '待确认') === actual.owner);
     fieldTotals.due += Number((expected.due || '待确认') === actual.due);
+    fieldTotals.est += Number((expected.est || '') === (actual.est || ''));
     // Phase 1: importance/urgency are null (set later by classify); skip strict comparison
     fieldTotals.importance += Number(
       expected.importance === actual.importance || expected.importance === null,
@@ -444,14 +463,9 @@ function evaluateSuccessfulCase(testCase, result) {
   for (const expected of expectedYesterdayActionable) {
     const actual = findEvidenceMatch(expected, actualEvidence);
     if (!actual) continue;
-    const covered = actualTasks.some(task => {
-      const evidenceIds = taskEvidenceById.get(task.id) || [];
-      const position = evidenceIds.indexOf(actual.id);
-      if (position === 0) return true;
-      if (position < 1) return false;
-      const primary = evidenceById.get(evidenceIds[0]);
-      return isDirectlyRelatedAuxiliary(primary, actual);
-    });
+    const covered = actualTasks.some(task => (
+      (taskEvidenceById.get(task.id) || []).includes(actual.id)
+    ));
     if (covered) yesterdayCovered += 1;
   }
 
@@ -547,7 +561,8 @@ function evaluateErrorCase(testCase, error) {
     evidenceOwnerCorrect: 0,
     evidenceDueCorrect: 0,
     fieldTotals: {
-      source: 0, owner: 0, due: 0, importance: 0, urgency: 0, acceptance: 0, nextAction: 0,
+      source: 0, owner: 0, due: 0, est: 0,
+      importance: 0, urgency: 0, acceptance: 0, nextAction: 0,
     },
     completedLeakage: 0,
     ownerHallucinations: 0,
@@ -564,7 +579,7 @@ function summarize(caseResults, mode) {
   const passed = caseResults.filter(item => item.passed).length;
   const sum = key => caseResults.reduce((value, item) => value + (item[key] || 0), 0);
   const fieldTotals = Object.fromEntries(
-    ['source', 'owner', 'due', 'importance', 'urgency', 'acceptance', 'nextAction'].map(field => [
+    ['source', 'owner', 'due', 'est', 'importance', 'urgency', 'acceptance', 'nextAction'].map(field => [
       field,
       caseResults.reduce((value, item) => value + (item.fieldTotals?.[field] || 0), 0),
     ]),

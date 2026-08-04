@@ -1,0 +1,82 @@
+{
+  "generatedAt": "2026-08-04",
+  "mode": "live",
+  "providerModel": "deepseek-v4-flash",
+  "dataset": "tests/evals/decomposition-cases-claude80.jsonl",
+  "totals": {
+    "cases": 80,
+    "passedStrict": 13,
+    "failedStrict": 67,
+    "strictPassRate": 0.1625,
+    "expectedTasks": 99,
+    "actualTasks": 91,
+    "matchedTasks": 54,
+    "taskPrecision": 0.5934065934,
+    "taskRecall": 0.5454545455,
+    "expectedEvidence": 126,
+    "matchedEvidence": 105
+  },
+  "domains": {
+    "A": { "passed": 0, "failed": 10, "taskPrecision": 0.625, "taskRecall": 0.625 },
+    "B": { "passed": 1, "failed": 9, "taskPrecision": 0.7272727273, "taskRecall": 0.7272727273 },
+    "C": { "passed": 4, "failed": 6, "taskPrecision": 0.3636363636, "taskRecall": 0.3636363636 },
+    "D": { "passed": 0, "failed": 10, "taskPrecision": 0.1, "taskRecall": 0.1 },
+    "E": { "passed": 2, "failed": 8, "taskPrecision": 0.6956521739, "taskRecall": 0.5925925926 },
+    "F": { "passed": 2, "failed": 8, "taskPrecision": 0.8181818182, "taskRecall": 0.75 },
+    "G": { "passed": 2, "failed": 8, "taskPrecision": 0.5555555556, "taskRecall": 0.4545454545 },
+    "H": { "passed": 2, "failed": 8, "taskPrecision": 0.75, "taskRecall": 0.6666666667 }
+  },
+  "failureCodes": {
+    "EVIDENCE_DUE_MISMATCH": 44,
+    "TASK_RECALL_MISS": 35,
+    "EVIDENCE_STATUS_MISMATCH": 34,
+    "UNEXPECTED_TASKS": 33,
+    "EVIDENCE_KIND_MISMATCH": 30,
+    "EVIDENCE_OWNER_MISMATCH": 21,
+    "EVIDENCE_MISSING": 20,
+    "DUE_MISMATCH": 13,
+    "EXPECTED_NO_ACTIONABLE_TASKS_GOT_SUCCESS": 4,
+    "YESTERDAY_ACTIONABLE_NOT_COVERED": 3,
+    "OWNER_MISMATCH": 2,
+    "EST_MISMATCH": 2,
+    "UNEXPECTED_MODEL_OUTPUT_INVALID": 2,
+    "NEXTACTION_MISMATCH": 1
+  },
+  "conditionalAccuracy": {
+    "matchedTaskFields": {
+      "source": 1,
+      "owner": 0.962962963,
+      "due": 0.7592592593,
+      "est": 0.962962963,
+      "acceptance": 1,
+      "nextAction": 0.9814814815
+    },
+    "matchedEvidenceFields": {
+      "status": 0.7523809524,
+      "kind": 0.8952380952,
+      "owner": 0.9904761905,
+      "due": 0.6666666667
+    }
+  },
+  "safety": {
+    "completedLeakage": 0,
+    "ownerHallucinations": 0,
+    "dueHallucinations": 0
+  },
+  "strictPassIds": [
+    "C80-B10",
+    "C80-C01",
+    "C80-C02",
+    "C80-C04",
+    "C80-C05",
+    "C80-E05",
+    "C80-E07",
+    "C80-F03",
+    "C80-F08",
+    "C80-G03",
+    "C80-G08",
+    "C80-H03",
+    "C80-H10"
+  ],
+  "interpretation": "The strict pass rate is a lower bound because task-label paraphrases and valid FactAtom regrouping can fail the exact oracle. Representative inspections still confirmed serious product defects in completed-status handling, due grounding, semantic roles, reconciliation, next-action extraction, and literal HTML quote preservation."
+}

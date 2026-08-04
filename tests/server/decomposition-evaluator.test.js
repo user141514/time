@@ -10,6 +10,12 @@ const {
 } = require('../../server/evals/decomposition-evaluator');
 
 const DATASET = path.join(__dirname, '..', 'evals', 'decomposition-cases.jsonl');
+const CLAUDE80_DATASET = path.join(
+  __dirname,
+  '..',
+  'evals',
+  'decomposition-cases-claude80.jsonl',
+);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -165,6 +171,262 @@ test('模拟模型编造证据原文时流水线拒绝且评测器记录非预�
   });
   assert.equal(report.summary.failed, 1);
   assert.match(report.summary.failures[0].failures[0], /UNEXPECTED_MODEL_OUTPUT_INVALID/);
+});
+
+test('replay uses grounded estimateRaw and reports est field accuracy', async () => {
+  const durationCase = {
+    id: 'REPLAY-DURATION',
+    description: 'replay duration grounding',
+    businessDate: '2026-08-04',
+    entries: {
+      昨天: '',
+      今天: '今天完成知识库文章分类，预计2小时。',
+      明天: '',
+      后天: '',
+    },
+    expected: {
+      evidence: [{
+        dimension: '今天',
+        quote: '完成知识库文章分类，预计2小时',
+        quoteKeywords: ['知识库', '预计2小时'],
+        kind: 'work',
+        status: 'planned',
+        owner: '待确认',
+        dueRaw: '待确认',
+        estimateRaw: '预计2小时',
+      }],
+      tasks: [{
+        name: '完成知识库文章分类',
+        nameKeywords: ['知识库', '文章分类'],
+        source: '今天',
+        dueRaw: '待确认',
+        due: '待确认',
+        est: '2h',
+        owner: '待确认',
+        importance: null,
+        urgency: null,
+        acceptanceCriteria: [],
+        evidenceIndexes: [0],
+      }],
+    },
+  };
+
+  const model = createReplayModel(durationCase);
+  const evidence = await model.completeJson({
+    responseSchemaName: 'time_evidence_atomization_v1',
+    user: JSON.stringify({ dimension: '今天' }),
+  });
+  assert.equal(evidence.atoms[0].estimateRef, '预计2小时');
+
+  const report = await runEvaluation({ cases: [durationCase], mode: 'replay' });
+  assert.equal(report.summary.passed, 1);
+  assert.equal(report.summary.taskFields.est, 1);
+});
+
+test('evaluation reports EST_MISMATCH when explicit duration is lost', async () => {
+  const durationCase = {
+    id: 'LIVE-DURATION-MISSING',
+    description: 'duration loss is visible',
+    businessDate: '2026-08-04',
+    entries: {
+      昨天: '',
+      今天: '今天完成知识库文章分类，预计2小时。',
+      明天: '',
+      后天: '',
+    },
+    expected: {
+      evidence: [{
+        dimension: '今天',
+        quote: '完成知识库文章分类，预计2小时',
+        quoteKeywords: ['知识库', '预计2小时'],
+        kind: 'work',
+        status: 'planned',
+        owner: '待确认',
+        dueRaw: '待确认',
+        estimateRaw: '预计2小时',
+      }],
+      tasks: [{
+        name: '完成知识库文章分类',
+        nameKeywords: ['知识库', '文章分类'],
+        source: '今天',
+        dueRaw: '待确认',
+        due: '待确认',
+        est: '2h',
+        owner: '待确认',
+        importance: null,
+        urgency: null,
+        acceptanceCriteria: [],
+        evidenceIndexes: [0],
+      }],
+    },
+  };
+  const model = createReplayModel(durationCase);
+  const originalCompleteJson = model.completeJson.bind(model);
+  model.completeJson = async input => {
+    const output = await originalCompleteJson(input);
+    if (input.responseSchemaName === 'time_evidence_atomization_v1') {
+      output.atoms = output.atoms.map(atom => ({
+        ...atom,
+        estimateRef: '',
+        confidence: { ...atom.confidence, estimate: 0 },
+      }));
+    }
+    return output;
+  };
+
+  const report = await runEvaluation({
+    cases: [durationCase],
+    mode: 'live',
+    liveModelClient: model,
+  });
+  assert.equal(report.summary.failed, 1);
+  assert.deepEqual(report.summary.failures[0].failures, ['EST_MISMATCH']);
+  assert.equal(report.summary.taskFields.est, 0);
+});
+
+test('replay builds an owner conflict when evidence has different explicit owners', async () => {
+  const conflictCase = {
+    id: 'REPLAY-OWNER-CONFLICT',
+    description: 'owner conflict remains unresolved',
+    businessDate: '2026-08-04',
+    entries: {
+      昨天: '昨天赵刚负责编写数据迁移脚本，还没完成。',
+      今天: '今天刘洋负责编写数据迁移脚本。',
+      明天: '',
+      后天: '',
+    },
+    expected: {
+      evidence: [
+        {
+          dimension: '昨天',
+          quote: '赵刚负责编写数据迁移脚本',
+          quoteKeywords: ['赵刚负责', '数据迁移脚本'],
+          kind: 'work',
+          status: 'unfinished',
+          owner: '赵刚',
+          dueRaw: '待确认',
+        },
+        {
+          dimension: '今天',
+          quote: '刘洋负责编写数据迁移脚本',
+          quoteKeywords: ['刘洋负责', '数据迁移脚本'],
+          kind: 'work',
+          status: 'planned',
+          owner: '刘洋',
+          dueRaw: '待确认',
+        },
+      ],
+      tasks: [{
+        name: '编写数据迁移脚本',
+        nameKeywords: ['编写', '数据迁移脚本'],
+        source: '今天',
+        dueRaw: '待确认',
+        due: '待确认',
+        est: '',
+        owner: '待确认',
+        importance: null,
+        urgency: null,
+        acceptanceCriteria: [],
+        evidenceIndexes: [0, 1],
+      }],
+    },
+  };
+
+  const model = createReplayModel(conflictCase);
+  const reconciliation = await model.completeJson({
+    responseSchemaName: 'time_reconciliation_v1',
+    user: JSON.stringify({ atoms: [] }),
+  });
+  assert.equal(reconciliation.clusters[0].mergedOwner.source, 'conflict');
+  assert.ok(reconciliation.conflicts.some(item => (
+    item.field === 'owner' && item.resolution === 'human_needed'
+  )));
+
+  const report = await runEvaluation({ cases: [conflictCase], mode: 'replay' });
+  assert.equal(report.summary.passed, 1);
+});
+
+test('clustered yesterday evidence counts as covered without a second lexical similarity gate', async () => {
+  const clusteredCase = {
+    id: 'REPLAY-CLUSTERED-YESTERDAY',
+    description: 'explicit cluster lineage is coverage',
+    businessDate: '2026-08-04',
+    entries: {
+      昨天: '昨天修复工作尚未安排。',
+      今天: '今天安排处理安全扫描发现的3个高危漏洞。',
+      明天: '',
+      后天: '',
+    },
+    expected: {
+      evidence: [
+        {
+          dimension: '昨天',
+          quote: '修复工作尚未安排',
+          quoteKeywords: ['修复工作', '尚未安排'],
+          kind: 'work',
+          status: 'unfinished',
+          owner: '待确认',
+          dueRaw: '待确认',
+        },
+        {
+          dimension: '今天',
+          quote: '处理安全扫描发现的3个高危漏洞',
+          quoteKeywords: ['安全扫描', '高危漏洞'],
+          kind: 'work',
+          status: 'planned',
+          owner: '待确认',
+          dueRaw: '待确认',
+        },
+      ],
+      tasks: [{
+        name: '修复3个高危漏洞',
+        nameKeywords: ['修复', '高危漏洞'],
+        source: '今天',
+        dueRaw: '待确认',
+        due: '待确认',
+        est: '',
+        owner: '待确认',
+        importance: null,
+        urgency: null,
+        acceptanceCriteria: [],
+        evidenceIndexes: [1, 0],
+      }],
+    },
+  };
+
+  const report = await runEvaluation({ cases: [clusteredCase], mode: 'replay' });
+  assert.equal(report.summary.passed, 1);
+  assert.equal(report.summary.yesterday.covered, 1);
+});
+
+test('curated 80-case dataset keeps domain quotas and introduces no unknown replay regressions', async () => {
+  const cases = loadJsonl(CLAUDE80_DATASET);
+  assert.equal(cases.length, 80);
+  assert.equal(new Set(cases.map(item => item.id)).size, 80);
+
+  const domainCounts = new Map();
+  for (const item of cases) {
+    const domain = /^C80-([A-H])\d{2}$/.exec(item.id)?.[1];
+    assert.ok(domain, `invalid case id: ${item.id}`);
+    domainCounts.set(domain, (domainCounts.get(domain) || 0) + 1);
+  }
+  assert.deepEqual(
+    Object.fromEntries([...domainCounts.entries()].sort()),
+    Object.fromEntries('ABCDEFGH'.split('').map(domain => [domain, 10])),
+  );
+
+  const report = await runEvaluation({ cases, mode: 'replay' });
+  assert.ok(report.summary.passed >= 74, `replay passed ${report.summary.passed}/80`);
+  const knownBoundaryIds = new Set([
+    'C80-C10',
+    'C80-D03',
+    'C80-D04',
+    'C80-F02',
+    'C80-F10',
+    'C80-H04',
+  ]);
+  const unknownFailures = report.summary.failures.filter(item => !knownBoundaryIds.has(item.id));
+  assert.deepEqual(unknownFailures, []);
 });
 
 test('JSONL加载器对损坏行提供文件与行号', () => {
