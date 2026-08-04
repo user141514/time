@@ -10,6 +10,10 @@ import {
 } from './api.js';
 import { downloadDailyTrackingWorkbook } from './excel-export.js';
 import {
+  evidenceForCoaching,
+  validateDecompositionResponse,
+} from './decomposition-adapter.mjs';
+import {
   CATEGORY_KEYS,
   createUuid,
   invalidateAfterEntries,
@@ -1044,16 +1048,14 @@ function recordTaskVisible(startedAt, decompositionId) {
 }
 
 function coachingRequestPayload() {
-  const taskStage = state.decomposition?.stages?.find(
-    stage => stage.name === 'evidence-task-generation',
-  );
-  if (!taskStage || !Array.isArray(taskStage.output?.evidence)) return null;
+  const evidence = evidenceForCoaching(state.decomposition);
+  if (!Array.isArray(evidence)) return null;
   return {
     decompositionId: state.coaching.decompositionId,
     attemptId: state.coaching.attemptId,
     businessDate: state.decomposition.businessDate,
     entries: { ...state.entries },
-    evidence: taskStage.output.evidence,
+    evidence,
   };
 }
 
@@ -1169,19 +1171,7 @@ async function decomposeTasks() {
   try {
     const result = await postJson('/api/time-management/tasks/decompose', { entries });
     if (!isCurrent(id)) return;
-    const taskStage = result.decomposition?.stages?.find(
-      stage => stage.name === 'evidence-task-generation',
-    );
-    if (
-      !result.decomposition?.decompositionId
-      || !result.decomposition.businessDate
-      || !Array.isArray(taskStage?.output?.evidence)
-      || !Array.isArray(result.tasks)
-    ) {
-      throw Object.assign(new Error('任务拆解响应格式不正确。'), {
-        code: 'DECOMPOSITION_RESPONSE_INVALID',
-      });
-    }
+    validateDecompositionResponse(result);
     clearInterval(progressTimer);
     state.pending = null;
     state.intake = result.intake;
