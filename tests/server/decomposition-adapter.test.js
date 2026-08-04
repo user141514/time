@@ -35,6 +35,8 @@ test('multi-agent decomposition is accepted and converted to coaching evidence',
             action: '提交排期表',
             actor: { role: 'explicit', name: '王芳' },
             dueRef: '今天18:00前',
+            estimateRef: '预计5小时',
+            confidence: { actor: 0.8, due: 0.6, status: 0.9 },
             status: 'in_progress',
           }],
           明天: [],
@@ -55,6 +57,8 @@ test('multi-agent decomposition is accepted and converted to coaching evidence',
     status: 'planned',
     owner: '王芳',
     due: '今天18:00前',
+    estimate: '预计5小时',
+    confidence: { actor: 0.8, due: 0.6, status: 0.9 },
   }]);
 });
 

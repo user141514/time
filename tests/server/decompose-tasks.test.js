@@ -70,6 +70,40 @@ function evidenceOnlyModel(byDimension = {}, opts = {}) {
   return model;
 }
 
+// 按 responseSchemaName 分派 5 路 critic 检查的模型客户端：
+// byCheck 值为 'timeout' 时模拟 MODEL_TIMEOUT，为函数时以检查输入构造 findings
+function criticAwareModel({ byDimension = {}, byCheck = {}, reconciliation = 'ok' } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async completeJson(request) {
+      calls.push(request);
+      const input = JSON.parse(request.user);
+      if (input.dimension !== undefined) {
+        return { dimension: input.dimension, atoms: byDimension[input.dimension] || [] };
+      }
+      if (request.responseSchemaName === 'time_reconciliation_v1') {
+        if (reconciliation === 'timeout') {
+          const error = new Error('timeout');
+          error.code = 'MODEL_TIMEOUT';
+          throw error;
+        }
+        return { clusters: [], conflicts: [] };
+      }
+      if (request.responseSchemaName?.startsWith('time_critic_')) {
+        const behavior = byCheck[request.responseSchemaName];
+        if (behavior === 'timeout') {
+          const error = new Error('timeout');
+          error.code = 'MODEL_TIMEOUT';
+          throw error;
+        }
+        return typeof behavior === 'function' ? behavior(input, request) : { findings: [] };
+      }
+      throw new Error('Unexpected call');
+    },
+  };
+}
+
 test('正常拆解每个非空维度一次模型调用返回可追溯任务', async () => {
   const modelClient = evidenceModel({
     昨天: [atom('昨天', { quote: '昨天未完成审核方案', action: '审核方案' })],
@@ -1875,4 +1909,107 @@ test('cluster 编译保留全部 atom lineage 且未完整分类的任务标记�
       atomId: 'atom-yesterday',
     },
   ]);
+});
+
+test('单个 critic 检查超时时流水线继续并以 partial 状态返回其余检查结果', async () => {
+  const modelClient = criticAwareModel({
+    byDimension: {
+      今天: [atom('今天', {
+        id: 'atom-critic-timeout',
+        quote: '今天18:00前提交排期表',
+        action: '提交排期表',
+        dueRef: '今天18:00前',
+      })],
+    },
+    byCheck: { time_critic_dedupe_v1: 'timeout' },
+  });
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '今天18:00前提交排期表', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-04T02:00:00.000Z'),
+  });
+
+  const criticStage = result.decomposition.stages.find(item => item.name === 'critic');
+  assert.equal(criticStage.status, 'partial');
+  assert.equal(criticStage.output.checkResults.dedupe.ok, false);
+  assert.equal(criticStage.output.checkResults.dedupe.errorCode, 'MODEL_TIMEOUT');
+  assert.equal(criticStage.output.checkResults.owner.ok, true);
+  assert.equal(criticStage.output.governanceStatus, 'accepted');
+  assert.equal(criticStage.attempts, 5);
+  assert.equal(result.tasks.length, 1);
+  // 其余 4 路检查仍被执行
+  assert.deepEqual(
+    new Set(modelClient.calls
+      .filter(call => call.responseSchemaName?.startsWith('time_critic_'))
+      .map(call => call.responseSchemaName)),
+    new Set(['time_critic_owner_v1', 'time_critic_due_v1', 'time_critic_coverage_v1', 'time_critic_dedupe_v1', 'time_critic_source_v1']),
+  );
+});
+
+test('critic 对同一任务一票否决一票通过时治理状态反映冲突', async () => {
+  const modelClient = criticAwareModel({
+    byDimension: {
+      今天: [atom('今天', {
+        id: 'atom-critic-conflict',
+        quote: '由王芳负责今天18:00前提交排期表',
+        action: '提交排期表',
+        actor: { role: 'explicit', name: '王芳' },
+        dueRef: '今天18:00前',
+      })],
+    },
+    byCheck: {
+      time_critic_owner_v1: input => ({
+        findings: [{
+          severity: 'blocker',
+          category: 'owner_hallucination',
+          description: '责任人不是执行者',
+          atomIds: [input.tasks[0].evidence[0].id],
+          taskIds: [input.tasks[0].id],
+        }],
+      }),
+    },
+  });
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '由王芳负责今天18:00前提交排期表', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-04T02:00:00.000Z'),
+  });
+
+  const criticStage = result.decomposition.stages.find(item => item.name === 'critic');
+  assert.equal(criticStage.status, 'succeeded');
+  assert.equal(criticStage.output.checkResults.owner.findings, 1);
+  assert.equal(criticStage.output.checkResults.due.findings, 0);
+  assert.equal(criticStage.output.governanceStatus, 'needs_confirmation');
+  assert.equal(result.tasks[0].owner, '待确认');
+  // due 检查通过 → 期限保留
+  assert.equal(result.tasks[0].due, '2026-08-04');
+  assert.equal(result.tasks[0].dueTime, '18:00');
+});
+
+test('reconciliation 超时回退时 critic 仍成功且输出回退任务', async () => {
+  const modelClient = criticAwareModel({
+    byDimension: {
+      今天: [atom('今天', {
+        id: 'atom-fallback-critic',
+        quote: '今天提交排期表',
+        action: '提交排期表',
+      })],
+    },
+    reconciliation: 'timeout',
+  });
+  const result = await decomposeTasks({
+    entries: { 昨天: '', 今天: '今天提交排期表', 明天: '', 后天: '' },
+    modelClient,
+    now: () => new Date('2026-08-04T02:00:00.000Z'),
+  });
+
+  const reconciliationStage = result.decomposition.stages.find(item => item.name === 'reconciliation');
+  assert.equal(reconciliationStage.status, 'degraded');
+  assert.equal(reconciliationStage.errorCode, 'MODEL_TIMEOUT');
+  assert.equal(reconciliationStage.fallbackMode, 'one-to-one');
+  const criticStage = result.decomposition.stages.find(item => item.name === 'critic');
+  assert.equal(criticStage.status, 'succeeded');
+  assert.equal(criticStage.output.governanceStatus, 'accepted');
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].name, '提交排期表');
 });

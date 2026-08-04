@@ -42,6 +42,8 @@ function atomToCoachingEvidence(atom, index) {
     status,
     owner: atom.actor?.name || '待确认',
     due: atom.dueRef || '待确认',
+    ...(atom.estimateRef ? { estimate: atom.estimateRef } : {}),
+    ...(atom.confidence ? { confidence: atom.confidence } : {}),
   };
 }
 

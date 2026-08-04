@@ -128,11 +128,17 @@ function createModelClient({
   const configuredMode = normalizeResponseFormatMode(modelResponseFormatMode);
   const configuredThinkingMode = normalizeThinkingMode(modelThinkingMode);
   let cachedAutoMode;
+  let cachedAutoModeCallCount = 0;
 
   function responseFormats(responseSchema, responseSchemaName, requestedMode) {
     const mode = normalizeResponseFormatMode(requestedMode ?? configuredMode);
     const jsonObject = { type: 'json_object' };
+    if (cachedAutoMode === 'json_object' && cachedAutoModeCallCount >= 50) {
+      cachedAutoMode = undefined;
+      cachedAutoModeCallCount = 0;
+    }
     if (!responseSchema || mode === 'json_object' || cachedAutoMode === 'json_object') {
+      if (cachedAutoMode === 'json_object') cachedAutoModeCallCount += 1;
       return [jsonObject];
     }
     const strict = {
@@ -349,6 +355,7 @@ function createModelClient({
           throw modelError('MODEL_UPSTREAM_ERROR', 'model request failed');
         }
         cachedAutoMode = 'json_object';
+        cachedAutoModeCallCount = 0;
       }
       throw modelError('MODEL_UPSTREAM_ERROR', 'model request failed');
     }
