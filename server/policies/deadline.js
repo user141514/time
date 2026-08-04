@@ -150,7 +150,13 @@ function extractDeadlineFromText(text, context = {}) {
   const dayWord = new RegExp(DAY_WORD.source, 'g');
   while ((match = dayWord.exec(text)) !== null) {
     const offset = RELATIVE_DAY_OFFSETS[match[1]];
-    const after = text.slice(match.index + match[0].length, match.index + match[0].length + 8);
+    const tail = text.slice(match.index + match[0].length);
+    const nextDay = new RegExp(DAY_WORD.source).exec(tail);
+    const punctuationIndex = tail.search(/[，。；;\n]/);
+    const boundaries = [48];
+    if (nextDay) boundaries.push(nextDay.index);
+    if (punctuationIndex >= 0) boundaries.push(punctuationIndex);
+    const after = tail.slice(0, Math.min(...boundaries));
     const clock = CLOCK_TIME.exec(after);
     const cn = CN_TIME.exec(after);
     const timeMatch = clock || cn;

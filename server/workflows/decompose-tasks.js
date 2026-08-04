@@ -59,8 +59,44 @@ function normalizeEstimateRef(value) {
   return `${Number((minutes / 60).toFixed(2))}h`;
 }
 
+function firstParsedDeadline(texts, context) {
+  for (const text of texts) {
+    if (typeof text !== 'string' || !text.trim()) continue;
+    const parsed = extractDeadlineFromText(text, context);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function rewriteCrossAgentAtomIdCollisions(results) {
+  const counts = new Map();
+  const reserved = new Set();
+  for (const result of results) {
+    for (const atom of result.atoms) {
+      counts.set(atom.id, (counts.get(atom.id) || 0) + 1);
+      reserved.add(atom.id);
+    }
+  }
+
+  let suffix = 0;
+  return results.map((result, dimensionIndex) => ({
+    ...result,
+    atoms: result.atoms.map((atom, atomIndex) => {
+      if (counts.get(atom.id) === 1) return atom;
+      let candidate = `srv-atom-${dimensionIndex + 1}-${atomIndex + 1}`;
+      while (reserved.has(candidate)) {
+        suffix += 1;
+        candidate = `srv-atom-${dimensionIndex + 1}-${atomIndex + 1}-${suffix}`;
+      }
+      reserved.add(candidate);
+      return { ...atom, id: candidate };
+    }),
+  }));
+}
+
 // 四个维度各跑一个 evidence agent（昨天/今天/明天/后天），并行无依赖。
 // 每个 agent 只抽取自己维度的 FactAtom；空维度跳过。合并后做一次边界校验。
+// 各并行模型无法协调全局 ID，因此跨 agent 冲突由服务端统一改写。
 async function runEvidenceAgents({
   modelClient,
   entries,
@@ -91,8 +127,11 @@ async function runEvidenceAgents({
     });
   }));
 
-  const byDimension = Object.fromEntries(results.map(result => [result.dimension, result.atoms]));
-  const merged = { atoms: results.flatMap(result => result.atoms), byDimension };
+  const normalizedResults = rewriteCrossAgentAtomIdCollisions(results);
+  const byDimension = Object.fromEntries(
+    normalizedResults.map(result => [result.dimension, result.atoms]),
+  );
+  const merged = { atoms: normalizedResults.flatMap(result => result.atoms), byDimension };
   if (!validateMergedEvidence(merged)) {
     throw outputError('evidence-agents', ['MERGED_EVIDENCE_SCHEMA_INVALID']);
   }
@@ -241,8 +280,9 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
     const ownerUnresolved = unresolvedFields.includes('owner');
     const extracted = dueUnresolved
       ? null
-      : extractDeadlineFromText(
-        cluster.mergedDueRef || primary.dueRef || primary.quote, deadlineContext,
+      : firstParsedDeadline(
+        [cluster.mergedDueRef, primary.dueRef, primary.quote],
+        deadlineContext,
       );
     const candidate = {
       name: cluster.label || primary.action || primary.quote,
@@ -256,7 +296,7 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
           : extractOwnerFromText(primary.quote) || '待确认'),
       status: 'pending',
       est: normalizeEstimateRef(
-        workAtoms.find(item => normalizeEstimateRef(item.estimateRef))?.estimateRef,
+        clusterAtoms.find(item => normalizeEstimateRef(item.estimateRef))?.estimateRef,
       ),
       importance: null,
       urgency: null,
@@ -277,7 +317,7 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
   for (const atom of atoms) {
     if (clusteredAtomIds.has(atom.id)) continue;
     if (atom.kind !== 'work') continue;
-    const extracted = extractDeadlineFromText(atom.dueRef || atom.quote, deadlineContext);
+    const extracted = firstParsedDeadline([atom.dueRef, atom.quote], deadlineContext);
     const candidate = {
       name: atom.action || atom.quote,
       source: CATEGORY_TO_SOURCE[atom.dimension],

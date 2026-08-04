@@ -185,26 +185,32 @@ test('输入行未被任何 atom 覆盖时重试后拒绝', async () => {
   assert.equal(modelClient.calls.length, 2);
 });
 
-test('跨维度 atom id 重复时拒绝', async () => {
+test('并行 evidence agent 返回重复 atom id 时由服务端统一改写为唯一 ID', async () => {
   const modelClient = evidenceModel({
     昨天: [atom('昨天', { quote: '昨天未完成审核方案', action: '审核方案', id: 'dup' })],
     今天: [atom('今天', { quote: '今天18:00前提交排期表', action: '提交排期表', id: 'dup' })],
   });
 
-  await assert.rejects(
-    decomposeTasks({
-      entries: {
-        昨天: '昨天未完成审核方案',
-        今天: '今天18:00前提交排期表',
-        明天: '',
-        后天: '',
-      },
-      modelClient,
-    }),
-    error => error.code === 'MODEL_OUTPUT_INVALID'
-      && error.failedRules.includes('EVIDENCE_ID_DUPLICATED'),
+  const result = await decomposeTasks({
+    entries: {
+      昨天: '昨天未完成审核方案',
+      今天: '今天18:00前提交排期表',
+      明天: '',
+      后天: '',
+    },
+    modelClient,
+    now: () => new Date('2026-08-04T02:00:00.000Z'),
+  });
+
+  const atomIds = result.decomposition.stages[0].output['昨天']
+    .concat(result.decomposition.stages[0].output['今天'])
+    .map(item => item.id);
+  assert.equal(new Set(atomIds).size, 2);
+  assert.equal(result.tasks.length, 2);
+  assert.deepEqual(
+    new Set(result.decomposition.taskAtoms.map(item => item.atomId)),
+    new Set(atomIds),
   );
-  assert.equal(modelClient.calls.length, 2);
 });
 
 test('reconciliation 失败时明确记录 one-to-one 回退模式', async () => {
@@ -490,6 +496,64 @@ test('未来明确行动保留验收条件和下一步', async () => {
   assert.equal(pipeline.due, '2026-12-31');
   assert.equal(pipeline.est, '16h');
   assert.equal(pipeline.nextAction, '先列出4个关键岗位和备份人选');
+});
+
+test('cluster 中 note atom 的工时、验收条件和下一步会合并回规范任务', () => {
+  const atoms = [
+    atom('今天', {
+      id: 'atom-work',
+      quote: '今天由王芳负责在18:00前提交新版排期表',
+      action: '提交新版排期表',
+      actor: { role: 'explicit', name: '王芳' },
+      dueRef: '18:00前',
+    }),
+    atom('今天', {
+      id: 'atom-estimate-note',
+      quote: '预计1小时',
+      kind: 'note',
+      action: '',
+      estimateRef: '预计1小时',
+      status: 'unknown',
+    }),
+    atom('今天', {
+      id: 'atom-acceptance-note',
+      quote: '验收标准：包含风险项和负责人',
+      kind: 'note',
+      action: '',
+      acceptanceCriteria: ['包含风险项和负责人'],
+      nextActionRef: '先核对风险项',
+      status: 'unknown',
+    }),
+  ];
+
+  const result = compileTasksFromClusters({
+    clusters: [{
+      id: 'cluster-metadata',
+      label: '新版排期表',
+      atomIds: atoms.map(item => item.id),
+      relations: [],
+      mergedOwner: { name: '王芳', source: 'explicit' },
+      mergedDueRef: '18:00前',
+      mergedStatus: 'planned',
+    }],
+    conflicts: [],
+    atoms,
+    byDimension: { 昨天: [], 今天: atoms, 明天: [], 后天: [] },
+    entries: {
+      昨天: '',
+      今天: '今天由王芳负责在18:00前提交新版排期表，预计1小时，验收标准：包含风险项和负责人，下一步：先核对风险项',
+      明天: '',
+      后天: '',
+    },
+    now: () => new Date('2026-08-04T02:00:00.000Z'),
+  });
+
+  assert.equal(result.tasks[0].owner, '王芳');
+  assert.equal(result.tasks[0].due, '2026-08-04');
+  assert.equal(result.tasks[0].dueTime, '18:00');
+  assert.equal(result.tasks[0].est, '1h');
+  assert.deepEqual(result.tasks[0].acceptanceCriteria, ['包含风险项和负责人']);
+  assert.equal(result.tasks[0].nextAction, '先核对风险项');
 });
 
 test('同一行多个独立动作由多个 FactAtom 编译为多条任务', async () => {

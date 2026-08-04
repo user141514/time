@@ -209,6 +209,14 @@ test('确定性期限提取：今晚18:00前 与 今天18点前 归到当天', (
   assert.deepEqual(extractDeadlineFromText('今天18点前完成联调', context), { date: '2026-07-20', time: '18:00' });
 });
 
+test('确定性期限提取：日期词与时刻之间允许出现责任人和动作前缀', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.deepEqual(
+    extractDeadlineFromText('今天由王芳负责在18:00前提交新版排期表', context),
+    { date: '2026-07-20', time: '18:00' },
+  );
+});
+
 test('确定性期限提取：下午/晚上按 12 小时制偏移，上午/凌晨保持不变', () => {
   const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
   assert.deepEqual(extractDeadlineFromText('今天下午3点前提交方案', context), { date: '2026-07-20', time: '15:00' });
