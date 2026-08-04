@@ -7,6 +7,7 @@ const {
   createReplayModel,
   loadJsonl,
   runEvaluation,
+  taskMatchScore,
 } = require('../../server/evals/decomposition-evaluator');
 
 const DATASET = path.join(__dirname, '..', 'evals', 'decomposition-cases.jsonl');
@@ -180,14 +181,14 @@ test('replay uses grounded estimateRaw and reports est field accuracy', async ()
     businessDate: '2026-08-04',
     entries: {
       昨天: '',
-      今天: '今天完成知识库文章分类，预计2小时。',
+      今天: '今天处理知识库文章分类，预计2小时。',
       明天: '',
       后天: '',
     },
     expected: {
       evidence: [{
         dimension: '今天',
-        quote: '完成知识库文章分类，预计2小时',
+        quote: '处理知识库文章分类，预计2小时',
         quoteKeywords: ['知识库', '预计2小时'],
         kind: 'work',
         status: 'planned',
@@ -230,20 +231,20 @@ test('evaluation reports EST_MISMATCH when explicit duration is lost', async () 
     businessDate: '2026-08-04',
     entries: {
       昨天: '',
-      今天: '今天完成知识库文章分类，预计2小时。',
+      今天: '今天处理知识库文章分类，工时2小时。',
       明天: '',
       后天: '',
     },
     expected: {
       evidence: [{
         dimension: '今天',
-        quote: '完成知识库文章分类，预计2小时',
-        quoteKeywords: ['知识库', '预计2小时'],
+        quote: '处理知识库文章分类，工时2小时',
+        quoteKeywords: ['知识库', '工时2小时'],
         kind: 'work',
         status: 'planned',
         owner: '待确认',
         dueRaw: '待确认',
-        estimateRaw: '预计2小时',
+        estimateRaw: '工时2小时',
       }],
       tasks: [{
         name: '完成知识库文章分类',
@@ -427,6 +428,43 @@ test('curated 80-case dataset keeps domain quotas and introduces no unknown repl
   ]);
   const unknownFailures = report.summary.failures.filter(item => !knownBoundaryIds.has(item.id));
   assert.deepEqual(unknownFailures, []);
+});
+
+test('task matching ignores generic delivery verbs and HTML markup but keeps business endpoints strict', () => {
+  const baseExpected = {
+    source: '今天',
+    owner: '待确认',
+    due: '待确认',
+  };
+  const baseActual = {
+    source: '今天',
+    owner: '待确认',
+    due: '待确认',
+  };
+
+  assert.ok(taskMatchScore({
+    ...baseExpected,
+    nameKeywords: ['发送', '测试用例', 'QA组长'],
+  }, {
+    ...baseActual,
+    name: '把测试用例发给QA组长李梅',
+  }) >= 0);
+
+  assert.ok(taskMatchScore({
+    ...baseExpected,
+    nameKeywords: ['API文档', '翻译', '提交', '共享目录'],
+  }, {
+    ...baseActual,
+    name: "翻译<span class='urgent'>API文档</span>第5节并提交到共享目录",
+  }) >= 0);
+
+  assert.equal(taskMatchScore({
+    ...baseExpected,
+    nameKeywords: ['采购申请', '审批'],
+  }, {
+    ...baseActual,
+    name: '处理采购申请',
+  }), -1);
 });
 
 test('JSONL加载器对损坏行提供文件与行号', () => {

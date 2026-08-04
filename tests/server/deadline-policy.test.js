@@ -220,7 +220,9 @@ test('确定性期限提取：日期词与时刻之间允许出现责任人和�
 test('确定性期限提取：下午/晚上按 12 小时制偏移，上午/凌晨保持不变', () => {
   const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
   assert.deepEqual(extractDeadlineFromText('今天下午3点前提交方案', context), { date: '2026-07-20', time: '15:00' });
+  assert.deepEqual(extractDeadlineFromText('今天下午4:30前提交方案', context), { date: '2026-07-20', time: '16:30' });
   assert.deepEqual(extractDeadlineFromText('明天晚上8点前完成', context), { date: '2026-07-21', time: '20:00' });
+  assert.deepEqual(extractDeadlineFromText('明天晚上8:15前完成', context), { date: '2026-07-21', time: '20:15' });
   assert.deepEqual(extractDeadlineFromText('后天凌晨3点值班', context), { date: '2026-07-22', time: '03:00' });
   assert.deepEqual(extractDeadlineFromText('明天上午10点联调', context), { date: '2026-07-21', time: '10:00' });
 });
@@ -244,6 +246,18 @@ test('确定性期限提取：本月底解析为当月最后一天', () => {
   const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
   assert.deepEqual(extractDeadlineFromText('本月底形成稳定性改进路线图', context), { date: '2026-07-31', time: null });
   assert.deepEqual(extractDeadlineFromText('月底前完成备份', context), { date: '2026-07-31', time: null });
+});
+
+test('确定性期限提取：版本号和标识符中的日期样式不算期限', () => {
+  const context = { now: SHANGHAI_NOON, timeZone: 'Asia/Shanghai' };
+  assert.equal(
+    extractDeadlineFromText('将前端依赖升级到 @core/ui-v2026.08.15', context),
+    null,
+  );
+  assert.deepEqual(
+    extractDeadlineFromText('将前端依赖升级到 v2026.08.15，并在2026-08-20前发布', context),
+    { date: '2026-08-20', time: null },
+  );
 });
 
 test('确定性期限提取：显式日期与 X月X日', () => {

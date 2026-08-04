@@ -15,6 +15,7 @@ const { checkIntake, splitEntries } = require('./check-intake');
 const { checkTaskSmart } = require('./check-task-smart');
 const { DECOMPOSITION_ITEM_LIMIT } = require('./decomposition-contracts');
 const { runEvidenceAgent } = require('./evidence-agent');
+const { hardenFactAtoms } = require('./evidence-hardening');
 const {
   assertFactAtomTrace,
   assertNoAtomIdDuplicates,
@@ -52,11 +53,51 @@ function normalizeEstimateRef(value) {
   const cleaned = value
     .trim()
     .replace(/[。；;，,]+$/u, '')
-    .replace(/^(?:(?:预计|大约|约|耗时)\s*)+/u, '');
+    .replace(/^(?:(?:预计(?:还)?(?:需要|需)?|大概|大约|约|耗时|还需要|还需)\s*)+/u, '');
   const minutes = parseEstimatedMinutes(cleaned);
   if (!Number.isFinite(minutes) || minutes <= 0) return '';
   if (minutes < 60) return `${minutes}分钟`;
   return `${Number((minutes / 60).toFixed(2))}h`;
+}
+
+const DIMENSION_DEADLINE_PREFIX = Object.freeze({
+  今天: '今天',
+  明天: '明天',
+  后天: '后天',
+});
+const EXPLICIT_DATE_SIGNAL = /今天|今日|明天|明日|后天|本周|月底|月末|20\d{2}|\d{1,2}月/u;
+const BARE_CLOCK_DEADLINE = /(?:(?:上午|下午|晚上|今晚|今夜|凌晨|中午|傍晚)\s*)?\d{1,2}(?::|：|点)\d{0,2}\s*(?:前|之前|截止|内)/u;
+
+function anchorDeadlineText(text, dimension) {
+  const value = String(text || '').trim();
+  const prefix = DIMENSION_DEADLINE_PREFIX[dimension];
+  if (!value || !prefix || EXPLICIT_DATE_SIGNAL.test(value) || !BARE_CLOCK_DEADLINE.test(value)) {
+    return value;
+  }
+  return `${prefix}${value}`;
+}
+
+function deadlineRefForAtom(atom) {
+  return anchorDeadlineText(atom?.dueRef, atom?.dimension);
+}
+
+function deadlineQuoteForAtom(atom) {
+  const quote = String(atom?.quote || '').trim();
+  if (
+    atom?.dimension === '今天'
+    && !String(atom?.dueRef || '').trim()
+    && /^(?:今天|今日)/u.test(quote)
+  ) {
+    return quote.replace(/^(?:今天|今日)\s*/u, '');
+  }
+  return anchorDeadlineText(quote, atom?.dimension);
+}
+
+function groundedClusterDueRef(cluster, clusterAtoms) {
+  const mergedDueRef = String(cluster?.mergedDueRef || '').trim();
+  if (!mergedDueRef) return '';
+  const backingAtom = clusterAtoms.find(atom => String(atom.dueRef || '').trim() === mergedDueRef);
+  return backingAtom ? anchorDeadlineText(mergedDueRef, backingAtom.dimension) : '';
 }
 
 function firstParsedDeadline(texts, context) {
@@ -127,7 +168,11 @@ async function runEvidenceAgents({
     });
   }));
 
-  const normalizedResults = rewriteCrossAgentAtomIdCollisions(results);
+  const lines = linesForEntries(entries);
+  const normalizedResults = rewriteCrossAgentAtomIdCollisions(results).map(result => ({
+    ...result,
+    atoms: hardenFactAtoms(result.atoms, lines[result.dimension]),
+  }));
   const byDimension = Object.fromEntries(
     normalizedResults.map(result => [result.dimension, result.atoms]),
   );
@@ -137,7 +182,6 @@ async function runEvidenceAgents({
   }
   // 每个 agent 内部已做过行级 trace 校验；合并边界只需防跨维度 ID 重复
   assertNoAtomIdDuplicates(merged.atoms);
-  const lines = linesForEntries(entries);
   for (const dimension of CATEGORY_KEYS) {
     assertFactAtomTrace(merged.byDimension[dimension], lines[dimension]);
   }
@@ -150,6 +194,14 @@ async function runEvidenceAgents({
     responseFormat: results.find(result => result.responseFormat)?.responseFormat
       || (responseFormatMode === 'json_object' ? 'json_object' : 'json_schema'),
   };
+}
+
+function isAncillaryAction(atom) {
+  const action = String(atom?.action || atom?.quote || '').trim();
+  return /^(?:并)?(?:抄送|知会|通知|同步给)/u.test(action)
+    || /^(?:并)?(?:提交|上传|保存)到.{1,24}/u.test(action)
+    || /^(?:并)?(?:发邮件|发送邮件|发送|提交)给.{1,24}(?:审阅|审核|审批)/u.test(action)
+    || /^(?:并)?向.{1,24}(?:汇报|审阅|审核|审批)/u.test(action);
 }
 
 function primaryAtomScore(atom) {
@@ -166,13 +218,72 @@ function primaryAtomScore(atom) {
   if (atom.actor?.role === 'explicit' && atom.actor?.name) score += 20;
   if (atom.dueRef) score += 10;
   if (atom.estimateRef) score += 5;
+  if (isAncillaryAction(atom)) score -= 250;
   return score;
 }
 
-function selectPrimaryAtom(workAtoms) {
-  return [...workAtoms].sort((left, right) => (
-    primaryAtomScore(right) - primaryAtomScore(left)
+function relationPrimaryBonus(atom, relations = []) {
+  let bonus = 0;
+  let incomingContinuation = 0;
+  let outgoingContinuation = 0;
+  for (const relation of relations) {
+    if (relation.toAtom === atom.id) {
+      if (relation.type === 'continuation') {
+        incomingContinuation += 1;
+        bonus += 80;
+      } else if (relation.type === 'dependency') bonus += 30;
+      else if (relation.type === 'same_work_item') bonus += 10;
+    }
+    if (relation.fromAtom === atom.id && relation.type === 'continuation') {
+      outgoingContinuation += 1;
+      bonus -= 20;
+    }
+  }
+  if (incomingContinuation > 0 && outgoingContinuation === 0) bonus += 180;
+  return bonus;
+}
+
+function selectPrimaryAtom(workAtoms, relations = []) {
+  const todayAtoms = workAtoms.filter(atom => atom.dimension === '今天');
+  const candidates = todayAtoms.length ? todayAtoms : workAtoms;
+  const candidateIds = new Set(candidates.map(atom => atom.id));
+  const candidateRelations = relations.filter(relation => (
+    candidateIds.has(relation.fromAtom) && candidateIds.has(relation.toAtom)
+  ));
+  return [...candidates].sort((left, right) => (
+    primaryAtomScore(right) + relationPrimaryBonus(right, candidateRelations)
+    - primaryAtomScore(left) - relationPrimaryBonus(left, candidateRelations)
   ))[0];
+}
+
+function stripProgressPrefix(value) {
+  const stripped = String(value || '').replace(/^(?:接手|继续|开始|正在)\s*/u, '').trim();
+  return stripped.replace(/^写(?=\p{Script=Han}|[A-Za-z0-9])/u, '编写');
+}
+
+function canonicalClusterTaskName(primary, cluster, clusterAtoms) {
+  const workAtoms = clusterAtoms.filter(atom => atom.kind === 'work');
+  const primaryAction = String(primary?.action || '').trim();
+  const genericOutcome = /^(?:完成|提交|输出|形成)(初稿|终稿|草稿|最终版)$/u.exec(primaryAction);
+  let baseName = stripProgressPrefix(primaryAction || cluster.label || primary?.quote);
+  if (genericOutcome) {
+    const outcome = genericOutcome[1];
+    const objectAtom = [...workAtoms]
+      .filter(atom => atom.id !== primary.id && atom.action && !isAncillaryAction(atom))
+      .sort((left, right) => {
+        const leftSameDimension = Number(left.dimension === primary.dimension);
+        const rightSameDimension = Number(right.dimension === primary.dimension);
+        return rightSameDimension - leftSameDimension || right.action.length - left.action.length;
+      })
+      .find(atom => !/^(?:完成|提交|输出|形成)(?:初稿|终稿|草稿|最终版)$/u.test(atom.action));
+    const base = stripProgressPrefix(objectAtom?.action || cluster.label);
+    if (base && !base.includes(outcome)) baseName = `${base}${outcome}`;
+  }
+  const ancillaryActions = clusterAtoms
+    .filter(atom => atom.id !== primary.id && isAncillaryAction(atom))
+    .map(atom => String(atom.action || atom.quote).replace(/^并/u, '').trim())
+    .filter(action => action && !baseName.includes(action));
+  return ancillaryActions.length ? `${baseName}并${ancillaryActions.join('并')}` : baseName;
 }
 
 function conflictsForCluster(conflicts, cluster) {
@@ -180,6 +291,207 @@ function conflictsForCluster(conflicts, cluster) {
   return conflicts.filter(conflict => (
     conflict.atomIds.every(atomId => clusterAtoms.has(atomId))
   ));
+}
+
+function mergedOwnerForAtom(atom) {
+  return atom.actor?.role === 'explicit' && atom.actor?.name
+    ? { name: atom.actor.name, source: 'explicit' }
+    : { name: '', source: 'implied' };
+}
+
+function mergedStatusForAtom(atom) {
+  return atom.status === 'unfinished' ? 'unfinished' : 'planned';
+}
+
+const CONTRASTING_SCOPE_GROUPS = Object.freeze([
+  ['前端', '后端'],
+  ['客户端', '服务端'],
+  ['线上', '线下'],
+  ['国内', '海外'],
+]);
+
+function hasContrastingScopes(workAtoms) {
+  const texts = workAtoms.map(atom => `${atom.action || ''}\n${atom.quote || ''}`);
+  return CONTRASTING_SCOPE_GROUPS.some(group => (
+    group.filter(term => texts.some(text => text.includes(term))).length > 1
+  ));
+}
+
+function hasContrastingTaskScopes(leftName, rightName) {
+  const left = String(leftName || '');
+  const right = String(rightName || '');
+  return CONTRASTING_SCOPE_GROUPS.some(group => (
+    group.some(term => left.includes(term))
+    && group.some(term => right.includes(term))
+    && !group.some(term => left.includes(term) && right.includes(term))
+  ));
+}
+
+function canonicalCrossSourceTaskName(name) {
+  return String(name || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/<[^>]*>/gu, '')
+    .replace(/^(?:完成|继续|开始|正在|接手)\s*/u, '')
+    .replace(/(?:项目计划书|计划书|项目|的)/gu, '')
+    .replace(/[^\p{Script=Han}a-z0-9]/gu, '');
+}
+
+function crossSourceTaskNamesMatch(leftName, rightName) {
+  if (hasContrastingTaskScopes(leftName, rightName)) return false;
+  const left = canonicalCrossSourceTaskName(leftName);
+  const right = canonicalCrossSourceTaskName(rightName);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length > right.length ? left : right;
+  return shorter.length >= 6
+    && longer.includes(shorter)
+    && shorter.length / longer.length >= 0.7;
+}
+
+function mergeCrossSourceCompiledItems(items = []) {
+  const merged = items.map(item => ({
+    ...item,
+    task: { ...item.task },
+    atomIds: [...(item.atomIds || [])],
+    unresolvedFields: [...(item.unresolvedFields || [])],
+  }));
+  const removed = new Set();
+
+  for (let todayIndex = 0; todayIndex < merged.length; todayIndex += 1) {
+    const todayItem = merged[todayIndex];
+    if (!['今天', '临时'].includes(todayItem.task.source)) continue;
+    const reviewIndex = merged.findIndex((candidate, index) => (
+      index !== todayIndex
+      && !removed.has(index)
+      && candidate.task.source === '复盘'
+      && crossSourceTaskNamesMatch(candidate.task.name, todayItem.task.name)
+    ));
+    if (reviewIndex < 0) continue;
+
+    const reviewItem = merged[reviewIndex];
+    const acceptanceCriteria = [...new Set([
+      ...(todayItem.task.acceptanceCriteria || []),
+      ...(reviewItem.task.acceptanceCriteria || []),
+    ])].slice(0, 5);
+    todayItem.task = {
+      ...reviewItem.task,
+      ...todayItem.task,
+      due: todayItem.task.due !== '待确认' ? todayItem.task.due : reviewItem.task.due,
+      est: todayItem.task.est || reviewItem.task.est,
+      owner: todayItem.task.owner !== '待确认' ? todayItem.task.owner : reviewItem.task.owner,
+      acceptanceCriteria,
+      nextAction: todayItem.task.nextAction || reviewItem.task.nextAction,
+      source: todayItem.task.source,
+      id: todayItem.task.id,
+    };
+    todayItem.clusterId = todayItem.clusterId || reviewItem.clusterId;
+    todayItem.atomIds = [...new Set([
+      ...todayItem.atomIds,
+      ...reviewItem.atomIds,
+    ])];
+    todayItem.reviewRequired = todayItem.reviewRequired || reviewItem.reviewRequired;
+    todayItem.unresolvedFields = [...new Set([
+      ...todayItem.unresolvedFields,
+      ...reviewItem.unresolvedFields,
+    ])];
+    removed.add(reviewIndex);
+  }
+
+  return merged.filter((_, index) => !removed.has(index));
+}
+
+function hasUmbrellaContext(clusterAtoms, workAtoms) {
+  if (workAtoms.length < 2) return false;
+  return clusterAtoms.some(atom => (
+    atom.kind !== 'work'
+    && atom.dueRef
+    && /(?:完成|建立|推进|实现).{0,24}(?:提升|建设|机制|体系|项目|计划|目标)/u.test(atom.quote)
+  ));
+}
+
+function normalizeReconciliationClusters({ clusters = [], conflicts = [], atoms = [] }) {
+  const atomById = new Map(atoms.map(atom => [atom.id, atom]));
+  const normalized = [];
+
+  for (const cluster of clusters) {
+    const clusterAtoms = cluster.atomIds.map(id => atomById.get(id)).filter(Boolean);
+    const workAtoms = clusterAtoms.filter(atom => atom.kind === 'work');
+    const dimensions = new Set(workAtoms.map(atom => atom.dimension));
+    const workIds = new Set(workAtoms.map(atom => atom.id));
+    const workRelations = (cluster.relations || []).filter(relation => (
+      workIds.has(relation.fromAtom) && workIds.has(relation.toAtom)
+    ));
+    const hasMergeRelation = workRelations.some(relation => (
+      ['same_work_item', 'duplicate', 'conflict'].includes(relation.type)
+    ));
+    const hasClusterConflict = conflicts.some(conflict => (
+      conflict.atomIds.some(atomId => cluster.atomIds.includes(atomId))
+    ));
+    const substantiveWorkAtoms = workAtoms.filter(atom => !isAncillaryAction(atom));
+    const ancillaryOnlyExtras = substantiveWorkAtoms.length === 1
+      && workAtoms.length > substantiveWorkAtoms.length;
+    const scopeConflict = hasContrastingScopes(workAtoms);
+    const umbrellaContext = hasUmbrellaContext(clusterAtoms, workAtoms);
+    const shouldSplit = workAtoms.length > 1
+      && !hasClusterConflict
+      && !ancillaryOnlyExtras
+      && (
+        scopeConflict
+        || umbrellaContext
+        || (dimensions.size === 1 && !hasMergeRelation)
+      );
+
+    if (!shouldSplit) {
+      normalized.push(cluster);
+      continue;
+    }
+
+    const assignments = new Map(workAtoms.map(atom => [atom.id, [atom.id]]));
+    const standalone = [];
+    for (const atom of clusterAtoms.filter(item => item.kind !== 'work')) {
+      const relatedWork = (cluster.relations || [])
+        .flatMap(relation => {
+          if (relation.fromAtom === atom.id && workIds.has(relation.toAtom)) return [relation.toAtom];
+          if (relation.toAtom === atom.id && workIds.has(relation.fromAtom)) return [relation.fromAtom];
+          return [];
+        });
+      const target = relatedWork[0];
+      if (target && assignments.has(target)) assignments.get(target).push(atom.id);
+      else standalone.push(atom);
+    }
+
+    for (const [index, workAtom] of workAtoms.entries()) {
+      const atomIds = assignments.get(workAtom.id);
+      const atomIdSet = new Set(atomIds);
+      normalized.push({
+        id: `${cluster.id}-split-${index + 1}`,
+        label: workAtom.action || workAtom.quote,
+        atomIds,
+        relations: (cluster.relations || []).filter(relation => (
+          atomIdSet.has(relation.fromAtom) && atomIdSet.has(relation.toAtom)
+        )),
+        mergedOwner: mergedOwnerForAtom(workAtom),
+        mergedDueRef: workAtom.dueRef || '',
+        mergedStatus: mergedStatusForAtom(workAtom),
+      });
+    }
+
+    for (const [index, atom] of standalone.entries()) {
+      normalized.push({
+        id: `${cluster.id}-context-${index + 1}`,
+        label: atom.quote,
+        atomIds: [atom.id],
+        relations: [],
+        mergedOwner: mergedOwnerForAtom(atom),
+        mergedDueRef: atom.dueRef || '',
+        mergedStatus: mergedStatusForAtom(atom),
+      });
+    }
+  }
+
+  return { clusters: normalized, conflicts };
 }
 
 function explicitAcceptanceCriteria(atoms) {
@@ -200,6 +512,77 @@ function explicitAcceptanceCriteria(atoms) {
 function explicitNextAction(atoms, primary) {
   if (primary?.nextActionRef?.trim()) return primary.nextActionRef.trim();
   return atoms.find(atom => atom.nextActionRef?.trim())?.nextActionRef.trim() || '';
+}
+
+function taskDueIsGrounded(item, atomById, deadlineContext) {
+  const task = item?.task;
+  if (!task || !task.due || task.due === '待确认') return false;
+  return (item.atomIds || []).some(atomId => {
+    const atom = atomById.get(atomId);
+    if (!atom) return false;
+    const parsed = firstParsedDeadline(
+      [deadlineRefForAtom(atom), deadlineQuoteForAtom(atom)],
+      deadlineContext,
+    );
+    if (!parsed || parsed.date !== task.due) return false;
+    return !task.dueTime || parsed.time === task.dueTime;
+  });
+}
+
+function taskSourceIsGrounded(item, atomById) {
+  const task = item?.task;
+  const primaryAtom = atomById.get(item?.atomIds?.[0]);
+  if (!task || !primaryAtom) return false;
+  if (primaryAtom.dimension === '今天') {
+    return ['今天', '临时'].includes(task.source);
+  }
+  return task.source === CATEGORY_TO_SOURCE[primaryAtom.dimension];
+}
+
+function filterGroundedCriticFindings({ findings = [], compiled, atoms = [], now = () => new Date() }) {
+  const instant = typeof now === 'function' ? now() : now;
+  const deadlineContext = { now: () => instant, timeZone: 'Asia/Shanghai' };
+  const atomById = new Map(atoms.map(atom => [atom.id, atom]));
+  const compiledItems = compiled?.compiledItems || [];
+  const itemByTaskId = new Map(
+    compiledItems.map(item => [item.task.id, item]),
+  );
+  const taskIdsByAtomId = new Map();
+  for (const item of compiledItems) {
+    for (const atomId of item.atomIds || []) {
+      const taskIds = taskIdsByAtomId.get(atomId) || new Set();
+      taskIds.add(item.task.id);
+      taskIdsByAtomId.set(atomId, taskIds);
+    }
+  }
+
+  return findings.filter(finding => {
+    if (finding.category === 'orphan_evidence' && finding.atomIds?.length) {
+      const allReferenced = finding.atomIds.every(atomId => {
+        const linkedTaskIds = taskIdsByAtomId.get(atomId);
+        if (!linkedTaskIds?.size) return false;
+        if (!finding.taskIds?.length) return true;
+        return finding.taskIds.some(taskId => linkedTaskIds.has(taskId));
+      });
+      if (allReferenced) return false;
+    }
+    if (!finding.taskIds?.length) return true;
+    if (finding.category === 'due_contamination') {
+      const allGrounded = finding.taskIds.every(taskId => {
+        const item = itemByTaskId.get(taskId);
+        return item && taskDueIsGrounded(item, atomById, deadlineContext);
+      });
+      return !allGrounded;
+    }
+    if (finding.category === 'wrong_source') {
+      const allGrounded = finding.taskIds.every(taskId => {
+        const item = itemByTaskId.get(taskId);
+        return item && taskSourceIsGrounded(item, atomById);
+      });
+      return !allGrounded;
+    }
+    return true;
+  });
 }
 
 function unresolvedFieldForFinding(category) {
@@ -268,12 +651,20 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
     const clusterAtoms = cluster.atomIds.map(id => atomById.get(id)).filter(Boolean);
     const workAtoms = clusterAtoms.filter(a => a.kind === 'work');
     if (workAtoms.length === 0) continue;
-    const primary = selectPrimaryAtom(workAtoms);
+    const primary = selectPrimaryAtom(workAtoms, cluster.relations);
     const matchedConflicts = conflictsForCluster(conflicts, cluster);
     const unresolvedFields = [...new Set(matchedConflicts
       .filter(conflict => conflict.resolution === 'human_needed')
       .map(conflict => conflict.field))];
-    if (cluster.mergedOwner.source === 'conflict' && !unresolvedFields.includes('owner')) {
+    const explicitOwners = new Set(
+      clusterAtoms
+        .filter(atom => atom.actor?.role === 'explicit' && atom.actor?.name)
+        .map(atom => atom.actor.name),
+    );
+    if (
+      (cluster.mergedOwner.source === 'conflict' || explicitOwners.size > 1)
+      && !unresolvedFields.includes('owner')
+    ) {
       unresolvedFields.push('owner');
     }
     const dueUnresolved = unresolvedFields.includes('due');
@@ -281,11 +672,15 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
     const extracted = dueUnresolved
       ? null
       : firstParsedDeadline(
-        [cluster.mergedDueRef, primary.dueRef, primary.quote],
+        [
+          groundedClusterDueRef(cluster, clusterAtoms),
+          deadlineRefForAtom(primary),
+          deadlineQuoteForAtom(primary),
+        ],
         deadlineContext,
       );
     const candidate = {
-      name: cluster.label || primary.action || primary.quote,
+      name: canonicalClusterTaskName(primary, cluster, clusterAtoms),
       source: CATEGORY_TO_SOURCE[primary.dimension],
       due: extracted?.date || '待确认',
       ...(extracted?.time ? { dueTime: extracted.time } : {}),
@@ -308,7 +703,7 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
     compiled.push({
       task,
       clusterId: cluster.id,
-      atomIds: [...cluster.atomIds],
+      atomIds: [primary.id, ...cluster.atomIds.filter(atomId => atomId !== primary.id)],
       reviewRequired: unresolvedFields.length > 0,
       unresolvedFields,
     });
@@ -317,7 +712,10 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
   for (const atom of atoms) {
     if (clusteredAtomIds.has(atom.id)) continue;
     if (atom.kind !== 'work') continue;
-    const extracted = firstParsedDeadline([atom.dueRef, atom.quote], deadlineContext);
+    const extracted = firstParsedDeadline(
+      [deadlineRefForAtom(atom), deadlineQuoteForAtom(atom)],
+      deadlineContext,
+    );
     const candidate = {
       name: atom.action || atom.quote,
       source: CATEGORY_TO_SOURCE[atom.dimension],
@@ -343,8 +741,9 @@ function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDime
       unresolvedFields: [],
     });
   }
-  const keptIds = new Set(dedupeCrossSourceTasks(compiled.map(item => item.task)).map(task => task.id));
-  const kept = compiled.filter(item => keptIds.has(item.task.id));
+  const semanticallyMerged = mergeCrossSourceCompiledItems(compiled);
+  const keptIds = new Set(dedupeCrossSourceTasks(semanticallyMerged.map(item => item.task)).map(task => task.id));
+  const kept = semanticallyMerged.filter(item => keptIds.has(item.task.id));
   return {
     tasks: kept.map(item => item.task),
     compiledItems: kept.map(item => ({
@@ -416,8 +815,13 @@ async function decomposeTasks({
       onAttempt,
       monotonicNow,
     });
-    clusters = reconResult.clusters;
-    conflicts = reconResult.conflicts;
+    const normalizedReconciliation = normalizeReconciliationClusters({
+      clusters: reconResult.clusters,
+      conflicts: reconResult.conflicts,
+      atoms: stage.atoms,
+    });
+    clusters = normalizedReconciliation.clusters;
+    conflicts = normalizedReconciliation.conflicts;
     reconciliationStage = {
       name: 'reconciliation',
       status: 'succeeded',
@@ -468,14 +872,20 @@ async function decomposeTasks({
       onAttempt,
       monotonicNow,
     });
-    governed = applyCriticFindings(compiled, criticResult.findings);
+    const effectiveFindings = filterGroundedCriticFindings({
+      findings: criticResult.findings,
+      compiled,
+      atoms: stage.atoms,
+      now: () => instant,
+    });
+    governed = applyCriticFindings(compiled, effectiveFindings);
     criticStage = {
       name: 'critic',
       status: criticResult.status,
       attempts: criticResult.attempts,
       durationMs: criticResult.durationMs,
       output: {
-        findings: criticResult.findings,
+        findings: effectiveFindings,
         checkResults: criticResult.checkResults,
         governanceStatus: governed.governanceStatus,
       },
@@ -521,5 +931,8 @@ module.exports = {
   applyCriticFindings,
   compileTasksFromClusters,
   decomposeTasks,
+  filterGroundedCriticFindings,
+  mergeCrossSourceCompiledItems,
+  normalizeReconciliationClusters,
   runEvidenceAgents,
 };

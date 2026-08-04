@@ -5,78 +5,420 @@
   "dataset": "tests/evals/decomposition-cases-claude80.jsonl",
   "totals": {
     "cases": 80,
-    "passedStrict": 13,
-    "failedStrict": 67,
-    "strictPassRate": 0.1625,
-    "expectedTasks": 99,
-    "actualTasks": 91,
-    "matchedTasks": 54,
-    "taskPrecision": 0.5934065934,
-    "taskRecall": 0.5454545455,
-    "expectedEvidence": 126,
-    "matchedEvidence": 105
-  },
-  "domains": {
-    "A": { "passed": 0, "failed": 10, "taskPrecision": 0.625, "taskRecall": 0.625 },
-    "B": { "passed": 1, "failed": 9, "taskPrecision": 0.7272727273, "taskRecall": 0.7272727273 },
-    "C": { "passed": 4, "failed": 6, "taskPrecision": 0.3636363636, "taskRecall": 0.3636363636 },
-    "D": { "passed": 0, "failed": 10, "taskPrecision": 0.1, "taskRecall": 0.1 },
-    "E": { "passed": 2, "failed": 8, "taskPrecision": 0.6956521739, "taskRecall": 0.5925925926 },
-    "F": { "passed": 2, "failed": 8, "taskPrecision": 0.8181818182, "taskRecall": 0.75 },
-    "G": { "passed": 2, "failed": 8, "taskPrecision": 0.5555555556, "taskRecall": 0.4545454545 },
-    "H": { "passed": 2, "failed": 8, "taskPrecision": 0.75, "taskRecall": 0.6666666667 }
-  },
-  "failureCodes": {
-    "EVIDENCE_DUE_MISMATCH": 44,
-    "TASK_RECALL_MISS": 35,
-    "EVIDENCE_STATUS_MISMATCH": 34,
-    "UNEXPECTED_TASKS": 33,
-    "EVIDENCE_KIND_MISMATCH": 30,
-    "EVIDENCE_OWNER_MISMATCH": 21,
-    "EVIDENCE_MISSING": 20,
-    "DUE_MISMATCH": 13,
-    "EXPECTED_NO_ACTIONABLE_TASKS_GOT_SUCCESS": 4,
-    "YESTERDAY_ACTIONABLE_NOT_COVERED": 3,
-    "OWNER_MISMATCH": 2,
-    "EST_MISMATCH": 2,
-    "UNEXPECTED_MODEL_OUTPUT_INVALID": 2,
-    "NEXTACTION_MISMATCH": 1
-  },
-  "conditionalAccuracy": {
-    "matchedTaskFields": {
-      "source": 1,
-      "owner": 0.962962963,
-      "due": 0.7592592593,
-      "est": 0.962962963,
-      "acceptance": 1,
-      "nextAction": 0.9814814815
-    },
-    "matchedEvidenceFields": {
-      "status": 0.7523809524,
-      "kind": 0.8952380952,
-      "owner": 0.9904761905,
-      "due": 0.6666666667
+    "passedStrict": 44,
+    "failedStrict": 36,
+    "strictPassRate": 0.55,
+    "expectedTasks": 102,
+    "actualTasks": 103,
+    "matchedTasks": 101,
+    "taskPrecision": 0.9805825242718447,
+    "taskRecall": 0.9901960784313726,
+    "taskF1": 0.9853658536585367,
+    "expectedEvidence": 129,
+    "matchedEvidence": 108,
+    "evidenceStatusCorrect": 96,
+    "evidenceKindCorrect": 105,
+    "evidenceOwnerCorrect": 107,
+    "evidenceDueCorrect": 97,
+    "safety": {
+      "completedLeakage": 0,
+      "ownerHallucinations": 0,
+      "dueHallucinations": 0
     }
   },
-  "safety": {
-    "completedLeakage": 0,
-    "ownerHallucinations": 0,
-    "dueHallucinations": 0
+  "domains": {
+    "A": {
+      "passed": 7,
+      "failed": 3,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "B": {
+      "passed": 6,
+      "failed": 4,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "C": {
+      "passed": 5,
+      "failed": 5,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "D": {
+      "passed": 3,
+      "failed": 7,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "E": {
+      "passed": 8,
+      "failed": 2,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "F": {
+      "passed": 5,
+      "failed": 5,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "G": {
+      "passed": 4,
+      "failed": 6,
+      "taskPrecision": 1,
+      "taskRecall": 1
+    },
+    "H": {
+      "passed": 6,
+      "failed": 4,
+      "taskPrecision": 0.9,
+      "taskRecall": 0.9
+    }
   },
-  "strictPassIds": [
-    "C80-B10",
-    "C80-C01",
-    "C80-C02",
-    "C80-C04",
-    "C80-C05",
-    "C80-E05",
-    "C80-E07",
-    "C80-F03",
-    "C80-F08",
-    "C80-G03",
-    "C80-G08",
-    "C80-H03",
-    "C80-H10"
-  ],
-  "interpretation": "The strict pass rate is a lower bound because task-label paraphrases and valid FactAtom regrouping can fail the exact oracle. Representative inspections still confirmed serious product defects in completed-status handling, due grounding, semantic roles, reconciliation, next-action extraction, and literal HTML quote preservation."
+  "failures": [
+    {
+      "id": "C80-A07",
+      "description": "带试探性措辞的今日计划仍视为可执行任务并保留原文期限",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-A08",
+      "description": "进行中工作与发现的问题各自独立，问题如需处理应有独立动作",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-A10",
+      "description": "今天同时存在已完成、待修复和进行中事项时应分别处理",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-B04",
+      "description": "向X汇报的X是接收人不是任务owner",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH",
+        "DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-B05",
+      "description": "请X审批的X是审批人不是任务执行者",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH",
+        "DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-B07",
+      "description": "昨天和今天同一事项不同责任人时应保守输出待确认",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH",
+        "YESTERDAY_ACTIONABLE_NOT_COVERED"
+      ]
+    },
+    {
+      "id": "C80-B08",
+      "description": "跨两天同一事项但始终无明确责任人时owner为待确认",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH",
+        "YESTERDAY_ACTIONABLE_NOT_COVERED"
+      ]
+    },
+    {
+      "id": "C80-C06",
+      "description": "显式ISO日期在明天维度应保留原值并按年月日标准化",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-C07",
+      "description": "无年份月日格式应以当年年份补全并按月日标准化",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-C08",
+      "description": "本周五相对星期表达应从业务日期正确偏移至周五",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-C09",
+      "description": "月底期限应正确计算月末日期且工期文本不误判为期限",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-C10",
+      "description": "同条目含多个不同期限时每个任务应取各自独立期限且跨越年界",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D04",
+      "description": "工时以备注形式独立出现时应作为context证据关联到对应任务",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D05",
+      "description": "显式验收标准应提取为acceptanceCriteria且不产生额外任务",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D06",
+      "description": "多条验收标准应全部收录且不拆分为独立任务",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D07",
+      "description": "中长期任务显式下一步应与工时同时保留",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D08",
+      "description": "嵌入工作描述的交付物要求应作为验收标准而非独立任务",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH",
+        "DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D09",
+      "description": "工时与验收标准同时出现应全部保留且不互相混淆",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-D10",
+      "description": "工时、验收标准与下一步同时出现应全部独立保留",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-E06",
+      "description": "括号内补充说明不产生额外任务仅一个主任务",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-E08",
+      "description": "混合中英文标识符的三个动作正确拆分且保留原样",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-F01",
+      "description": "昨天到今天的延续工作应合并为一个规范任务，保留两个维度的证据索引",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-F02",
+      "description": "跨天相同工作对象只生成一个任务，昨天进展和今天交付合并",
+      "failures": [
+        "UNEXPECTED_TASKS",
+        "EVIDENCE_STATUS_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-F04",
+      "description": "依赖关系不合并任务，已完成产出作为新任务的上下文而非同一工作",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-F05",
+      "description": "问题发现和修复安排跨维度指向同一任务，三个证据项合并为一个任务",
+      "failures": [
+        "EVIDENCE_KIND_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-F10",
+      "description": "三个维度协同指向同一工作对象，合并为一个规范任务并保留全部证据",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G02",
+      "description": "培训任务包含预估工时和明确第一步",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G04",
+      "description": "机制建设长期任务包含明确第一步",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G05",
+      "description": "长期技术治理任务包含验收条件",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G07",
+      "description": "长期体系建设任务包含明确第一步",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G09",
+      "description": "长期目标包含多个独立可执行行动拆分为独立任务",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH",
+        "DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-G10",
+      "description": "明天短期目标与后天长期目标共存验证来源分类",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-H01",
+      "description": "用户输入中包含类似prompt-injection的文本应被视为字面内容而非系统指令",
+      "failures": [
+        "EVIDENCE_MISSING",
+        "EVIDENCE_STATUS_MISMATCH",
+        "EVIDENCE_KIND_MISMATCH",
+        "EVIDENCE_OWNER_MISMATCH",
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-H04",
+      "description": "仅作为报告接收人或审阅人的姓名不应被识别为任务责任人",
+      "failures": [
+        "EVIDENCE_DUE_MISMATCH"
+      ]
+    },
+    {
+      "id": "C80-H06",
+      "description": "工单编号中的UUID格式字符串应被视作普通标识符而非特殊指令或日期",
+      "failures": [
+        "TASK_RECALL_MISS",
+        "UNEXPECTED_TASKS"
+      ]
+    },
+    {
+      "id": "C80-H07",
+      "description": "HTML标签片段应保留原文 grounding，翻译与提交交付链合并为一条任务",
+      "failures": [
+        "EVIDENCE_STATUS_MISMATCH"
+      ]
+    }
+  ]
 }

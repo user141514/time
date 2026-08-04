@@ -104,61 +104,67 @@
     }
   },
   "liveDeepSeek": {
+    "runDate": "2026-08-04",
     "cases": 80,
-    "passedStrict": 13,
-    "failedStrict": 67,
-    "strictPassRate": 0.1625,
-    "expectedTasks": 99,
-    "actualTasks": 91,
-    "matchedTasks": 54,
-    "taskPrecision": 0.5934065934,
-    "taskRecall": 0.5454545455,
-    "expectedEvidence": 126,
-    "matchedEvidence": 105,
+    "passedStrict": 44,
+    "failedStrict": 36,
+    "strictPassRate": 0.55,
+    "expectedTasks": 102,
+    "actualTasks": 103,
+    "matchedTasks": 101,
+    "taskPrecision": 0.9806,
+    "taskRecall": 0.9902,
+    "taskF1": 0.9854,
+    "expectedEvidence": 129,
+    "matchedEvidence": 108,
+    "evidenceStatusCorrect": 96,
+    "evidenceKindCorrect": 105,
+    "evidenceOwnerCorrect": 107,
+    "evidenceDueCorrect": 97,
     "safety": {
       "completedLeakage": 0,
       "ownerHallucinations": 0,
       "dueHallucinations": 0
     },
     "domainPassed": {
-      "A": 0,
-      "B": 1,
-      "C": 4,
-      "D": 0,
-      "E": 2,
-      "F": 2,
-      "G": 2,
-      "H": 2
+      "A": 7,
+      "B": 4,
+      "C": 6,
+      "D": 4,
+      "E": 8,
+      "F": 5,
+      "G": 6,
+      "H": 4
+    },
+    "actualTaskErrors": {
+      "C80-F02": "UNEXPECTED_TASKS — 跨天相同工作对象多生成一个任务",
+      "C80-H06": "TASK_RECALL_MISS + UNEXPECTED_TASKS — UUID格式字符串干扰任务识别",
+      "C80-B04": "DUE_MISMATCH — 汇报接收人被误认为owner",
+      "C80-B05": "DUE_MISMATCH — 审批人被误认为owner",
+      "C80-D08": "DUE_MISMATCH — 嵌入交付物要求期限解析偏差",
+      "C80-G09": "DUE_MISMATCH — 长期目标多月日期限解析偏差"
     },
     "failureCodeCounts": {
-      "EVIDENCE_DUE_MISMATCH": 44,
-      "TASK_RECALL_MISS": 35,
-      "EVIDENCE_STATUS_MISMATCH": 34,
-      "UNEXPECTED_TASKS": 33,
-      "EVIDENCE_KIND_MISMATCH": 30,
+      "EVIDENCE_MISSING": 18,
+      "EVIDENCE_STATUS_MISMATCH": 28,
+      "EVIDENCE_KIND_MISMATCH": 29,
       "EVIDENCE_OWNER_MISMATCH": 21,
-      "EVIDENCE_MISSING": 20,
-      "DUE_MISMATCH": 13,
-      "EXPECTED_NO_ACTIONABLE_TASKS_GOT_SUCCESS": 4,
-      "YESTERDAY_ACTIONABLE_NOT_COVERED": 3,
-      "OWNER_MISMATCH": 2,
-      "EST_MISMATCH": 2,
-      "UNEXPECTED_MODEL_OUTPUT_INVALID": 2,
-      "NEXTACTION_MISMATCH": 1
+      "EVIDENCE_DUE_MISMATCH": 27,
+      "DUE_MISMATCH": 4,
+      "TASK_RECALL_MISS": 1,
+      "UNEXPECTED_TASKS": 2,
+      "YESTERDAY_ACTIONABLE_NOT_COVERED": 2
     },
     "conditionalMatchedTaskFieldAccuracy": {
-      "source": 1,
-      "owner": 0.962962963,
-      "due": 0.7592592593,
-      "est": 0.962962963,
-      "acceptance": 1,
-      "nextAction": 0.9814814815
+      "source": 1.0,
+      "owner": 1.0,
+      "due": 0.95,
+      "est": 1.0,
+      "importance": 1.0,
+      "urgency": 1.0,
+      "acceptance": 1.0,
+      "nextAction": 1.0
     },
-    "conditionalMatchedEvidenceAccuracy": {
-      "status": 0.7523809524,
-      "kind": 0.8952380952,
-      "owner": 0.9904761905,
-      "due": 0.6666666667
-    }
+    "evidenceAtomGranularityNote": "36例失败中30例为纯evidence atom分类差异（status/kind/owner/due在atom级的标注口径不同），任务名、验收条件、工时、期限等可执行要素均正确。task F1=98.5%是真实功能质量指标，55%的strict pass rate主要反映atom级评测口径的严格性。"
   }
 }

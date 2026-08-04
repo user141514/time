@@ -23,6 +23,8 @@ docs/
 task-spec.md
 tests/manual-test-input-template.md
 tmp/
+tests/evals/claude80/
+tests/evals/claude80-curation.md
 *.log
 npm-debug.log*
 .DS_Store

@@ -133,7 +133,7 @@ function extractDeadlineFromText(text, context = {}) {
   };
 
   let match;
-  const explicitYear = /(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})[日号]?/g;
+  const explicitYear = /(?<![A-Za-z0-9_.-])(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})[日号]?/g;
   while ((match = explicitYear.exec(text)) !== null) {
     const date = `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
     if (isValidCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))) {
@@ -161,9 +161,9 @@ function extractDeadlineFromText(text, context = {}) {
     const cn = CN_TIME.exec(after);
     const timeMatch = clock || cn;
     let time = timeMatch ? formatTime(timeMatch) : null;
-    if (time && timeMatch === cn) {
-      const hour = Number(cn[1]);
-      const period = TIME_PERIOD.exec(after.slice(0, cn.index));
+    if (time && timeMatch) {
+      const hour = Number(timeMatch[1]);
+      const period = TIME_PERIOD.exec(after.slice(0, timeMatch.index));
       if (period && (period[1] === '下午' || period[1] === '晚上' || period[1] === '傍晚') && hour < 12) {
         time = `${String(hour + 12).padStart(2, '0')}:${time.slice(3)}`;
       }

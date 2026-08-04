@@ -46,6 +46,53 @@ function canRetry(deadlineAt, monotonicNow) {
   return !Number.isFinite(deadlineAt) || deadlineAt - monotonicNow() >= 2_000;
 }
 
+function plainTextMapping(source) {
+  const characters = [];
+  const rawIndexes = [];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '<') {
+      const close = source.indexOf('>', index + 1);
+      if (close >= 0) {
+        index = close;
+        continue;
+      }
+    }
+    characters.push(source[index]);
+    rawIndexes.push(index);
+  }
+  return { plain: characters.join(''), rawIndexes };
+}
+
+function stripMarkup(value) {
+  return String(value || '').replace(/<[^>]*>/gu, '');
+}
+
+function restoreMarkupQuote(sourceLine, quote) {
+  if (sourceLine.includes(quote)) return quote;
+  if (!sourceLine.includes('<') || !sourceLine.includes('>')) return quote;
+  const quotePlain = stripMarkup(quote);
+  if (!quotePlain) return quote;
+  const mapping = plainTextMapping(sourceLine);
+  const plainIndex = mapping.plain.indexOf(quotePlain);
+  if (plainIndex < 0) return quote;
+  const rawStart = mapping.rawIndexes[plainIndex];
+  const rawEnd = mapping.rawIndexes[plainIndex + quotePlain.length - 1];
+  if (!Number.isInteger(rawStart) || !Number.isInteger(rawEnd)) return quote;
+  return sourceLine.slice(rawStart, rawEnd + 1);
+}
+
+function restoreMarkupQuotes(response, lines) {
+  if (!Array.isArray(response?.atoms)) return response;
+  return {
+    ...response,
+    atoms: response.atoms.map(atom => {
+      const sourceLine = lines[atom.sourceLineIndex];
+      if (typeof sourceLine !== 'string' || typeof atom.quote !== 'string') return atom;
+      return { ...atom, quote: restoreMarkupQuote(sourceLine, atom.quote) };
+    }),
+  };
+}
+
 function validateAtoms(response, dimension, lines) {
   if (
     !response
@@ -56,12 +103,13 @@ function validateAtoms(response, dimension, lines) {
   ) {
     throw outputError(STAGE, ['EVIDENCE_DIMENSION_MISMATCH']);
   }
-  if (!validateEvidenceResponse(response)) {
+  const normalizedResponse = restoreMarkupQuotes(response, lines);
+  if (!validateEvidenceResponse(normalizedResponse)) {
     throw outputError(STAGE, ['EVIDENCE_SCHEMA_INVALID']);
   }
-  assertNoAtomIdDuplicates(response.atoms);
-  assertFactAtomTrace(response.atoms, lines);
-  return response;
+  assertNoAtomIdDuplicates(normalizedResponse.atoms);
+  assertFactAtomTrace(normalizedResponse.atoms, lines);
+  return normalizedResponse;
 }
 
 async function runEvidenceAgent({

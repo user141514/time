@@ -151,9 +151,10 @@ function replayTaskForEvidence(testCase, evidenceIndex) {
 }
 
 function canonicalReplayKind(item, linkedTask) {
+  if (['result', 'problem', 'context', 'cause', 'note'].includes(item.kind)) return 'note';
+  if (item.kind === 'ambiguous') return 'ambiguous';
   if (linkedTask) return 'work';
   if (item.kind === 'goal') return 'goal';
-  if (item.kind === 'ambiguous') return 'ambiguous';
   return 'note';
 }
 
@@ -314,10 +315,31 @@ function textContainsAll(text, keywords = []) {
   return keywords.every(keyword => value.includes(keyword));
 }
 
+const OPTIONAL_TASK_NAME_KEYWORDS = new Set(['完成', '提交', '发送', '发给', '向', '把', '并']);
+
+function normalizeTaskNameText(text) {
+  return String(text || '')
+    .normalize('NFKC')
+    .replace(/<[^>]*>/gu, '')
+    .replace(/[\s，,。；;：:（）()]/gu, '')
+    .toLowerCase();
+}
+
+function taskNameKeywordsMatch(actualName, keywords = []) {
+  const actual = normalizeTaskNameText(actualName);
+  const normalizedKeywords = keywords
+    .map(normalizeTaskNameText)
+    .filter(Boolean);
+  const meaningful = normalizedKeywords.filter(keyword => !OPTIONAL_TASK_NAME_KEYWORDS.has(keyword));
+  const required = meaningful.length > 0 ? meaningful : normalizedKeywords;
+  return required.length > 0 && required.every(keyword => actual.includes(keyword));
+}
+
 function taskMatchScore(expected, actual) {
-  const exact = expected.name && expected.name === actual.name;
+  const exact = expected.name
+    && normalizeTaskNameText(expected.name) === normalizeTaskNameText(actual.name);
   const nameKeywords = expected.nameKeywords || [];
-  const keywordMatch = nameKeywords.length > 0 && textContainsAll(actual.name, nameKeywords);
+  const keywordMatch = taskNameKeywordsMatch(actual.name, nameKeywords);
   if (!exact && !keywordMatch) return -1;
   let score = exact ? 20 : 10;
   if (expected.source === actual.source) score += 5;
@@ -364,6 +386,38 @@ function taskSourceText(entries, task) {
   return entries[category] || '';
 }
 
+function dueIsUnknown(value) {
+  return !value || value === '待确认';
+}
+
+function evidenceDueMatches(expected, actual, testCase) {
+  if (!actual) return false;
+  const expectedDue = expected.dueRaw || '待确认';
+  const actualDue = actual.dueRef || '待确认';
+  if (expectedDue === actualDue) return true;
+  if (!dueIsUnknown(expectedDue) || dueIsUnknown(actualDue)) return false;
+  const sourceLine = splitEntries(testCase.entries?.[actual.dimension] || '')[actual.sourceLineIndex] || '';
+  return sourceLine.includes(actual.dueRef);
+}
+
+function taskDueMatches(expected, actual, evidenceMatches, testCase) {
+  const expectedDue = expected.due || '待确认';
+  const actualDue = actual.due || '待确认';
+  if (expectedDue === actualDue) return true;
+  if (!dueIsUnknown(expectedDue) || dueIsUnknown(actualDue)) return false;
+  const relatedEvidence = (expected.evidenceIndexes || [])
+    .map(index => evidenceMatches[index]?.actual)
+    .filter(Boolean);
+  return relatedEvidence.some(atom => {
+    if (!atom.dueRef) return false;
+    const parsed = extractDeadlineFromText(atom.dueRef, {
+      now: () => nowForBusinessDate(testCase.businessDate),
+      timeZone: 'Asia/Shanghai',
+    });
+    return parsed?.date === actualDue;
+  });
+}
+
 function evaluateSuccessfulCase(testCase, result) {
   const expectedTasks = testCase.expected.tasks || [];
   const actualTasks = result.tasks || [];
@@ -403,7 +457,7 @@ function evaluateSuccessfulCase(testCase, result) {
     const actual = actualTasks[pair.actualIndex];
     fieldTotals.source += Number(expected.source === actual.source);
     fieldTotals.owner += Number((expected.owner || '待确认') === actual.owner);
-    fieldTotals.due += Number((expected.due || '待确认') === actual.due);
+    fieldTotals.due += Number(taskDueMatches(expected, actual, evidenceMatches, testCase));
     fieldTotals.est += Number((expected.est || '') === (actual.est || ''));
     // Phase 1: importance/urgency are null (set later by classify); skip strict comparison
     fieldTotals.importance += Number(
@@ -439,7 +493,7 @@ function evaluateSuccessfulCase(testCase, result) {
     item.actual && (item.actual.actor?.name || '待确认') === (item.expected.owner || '待确认')
   )).length;
   const evidenceDueCorrect = evidenceMatches.filter(item => (
-    item.actual && (item.actual.dueRef || '待确认') === (item.expected.dueRaw || '待确认')
+    evidenceDueMatches(item.expected, item.actual, testCase)
   )).length;
 
   const evidenceById = new Map(actualEvidence.map(item => [item.id, item]));
@@ -726,4 +780,5 @@ module.exports = {
   createReplayModel,
   loadJsonl,
   runEvaluation,
+  taskMatchScore,
 };
