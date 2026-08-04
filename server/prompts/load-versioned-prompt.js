@@ -19,6 +19,34 @@ const DEFINITIONS = Object.freeze({
     version: '2.0.0',
     relativePath: 'decomposition/coaching-analysis.v2.md',
   }),
+  'decomposition.evidence-agent': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/evidence-agent.v1.md',
+  }),
+  'decomposition.reconciliation': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/reconciliation.v1.md',
+  }),
+  'decomposition.critic-owner': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-owner.v1.md',
+  }),
+  'decomposition.critic-due': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-due.v1.md',
+  }),
+  'decomposition.critic-coverage': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-coverage.v1.md',
+  }),
+  'decomposition.critic-dedupe': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-dedupe.v1.md',
+  }),
+  'decomposition.critic-source': Object.freeze({
+    version: '1.0.0',
+    relativePath: 'decomposition/critic-source.v1.md',
+  }),
 });
 
 const CACHE = new Map();

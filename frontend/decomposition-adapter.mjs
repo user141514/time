@@ -25,7 +25,7 @@ function multiAgentAtoms(decomposition) {
   return arrays.flat();
 }
 
-function atomToCoachingEvidence(atom) {
+function atomToCoachingEvidence(atom, index) {
   const kind = atom?.kind === 'note' || atom?.kind === 'ambiguous'
     ? 'context'
     : atom?.kind;
@@ -33,7 +33,7 @@ function atomToCoachingEvidence(atom) {
     ? 'planned'
     : atom?.status;
   return {
-    id: atom.id,
+    id: `E${index + 1}`,
     dimension: atom.dimension,
     sourceLineIndex: atom.sourceLineIndex,
     quote: atom.quote,
@@ -43,6 +43,46 @@ function atomToCoachingEvidence(atom) {
     owner: atom.actor?.name || '待确认',
     due: atom.dueRef || '待确认',
   };
+}
+
+export function decompositionReviewNotice(decomposition) {
+  if (!String(decomposition?.pipelineVersion || '').startsWith('multi-agent-v2')) {
+    return null;
+  }
+  const critic = decomposition.stages?.find(stage => stage?.name === 'critic');
+  const governanceStatus = critic?.output?.governanceStatus;
+  if (governanceStatus === 'needs_confirmation') {
+    return {
+      level: 'warning',
+      code: 'TASKS_NEED_CONFIRMATION',
+      message: 'AI 审查发现部分任务的责任人、期限或证据需要人工确认；相关不确定字段已回退为待确认。',
+    };
+  }
+  if (critic?.status === 'partial' || critic?.status === 'degraded') {
+    return {
+      level: 'warning',
+      code: 'CRITIC_INCOMPLETE',
+      message: '部分任务审查未完成，请在继续前重点核对责任人、截止时间、来源和重复项。',
+    };
+  }
+  if (governanceStatus === 'review_recommended') {
+    return {
+      level: 'warning',
+      code: 'TASK_REVIEW_RECOMMENDED',
+      message: 'AI 审查提出了非阻断性提醒，请核对任务内容后继续。',
+    };
+  }
+  const reconciliation = decomposition.stages?.find(
+    stage => stage?.name === 'reconciliation',
+  );
+  if (reconciliation?.status === 'degraded') {
+    return {
+      level: 'warning',
+      code: 'RECONCILIATION_FALLBACK',
+      message: '跨栏事项未能完成聚类，系统已按每条事实独立生成任务；请重点检查重复项和前后依赖。',
+    };
+  }
+  return null;
 }
 
 export function evidenceForCoaching(decomposition) {

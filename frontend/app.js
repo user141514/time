@@ -10,6 +10,7 @@ import {
 } from './api.js';
 import { downloadDailyTrackingWorkbook } from './excel-export.js';
 import {
+  decompositionReviewNotice,
   evidenceForCoaching,
   validateDecompositionResponse,
 } from './decomposition-adapter.mjs';
@@ -455,6 +456,12 @@ function taskEditRow(task) {
   </div>`;
 }
 
+function decompositionReviewMarkup() {
+  const notice = decompositionReviewNotice(state.decomposition);
+  if (!notice) return '';
+  return `<div class="aibar" data-decomposition-review="${escapeHtml(notice.code)}"><span class="sp">!</span><div>${escapeHtml(notice.message)}</div></div>`;
+}
+
 function coachingStatus() {
   const { status, historySyncStatus } = state.coaching;
   if (status === 'idle') return '';
@@ -483,6 +490,7 @@ function stepTwoBody() {
     <div class="panel-body"><div class="aibar"><span class="sp">AI</span><div style="flex:1">任务需具体、具有可解析工时和明确轻重缓急；后端不替你虚构缺失条件。</div>
       <button class="btn btn-ghost btn-sm" data-action="smart-check" ${state.pending ? 'disabled' : ''}>${state.pending === 'smart' ? '<span class="mini-spin"></span>校验中…' : 'SMART 校验'}</button>
       <button class="btn btn-ghost btn-sm" data-action="open-add-task">+ 手动添加任务</button></div>
+      ${decompositionReviewMarkup()}
       <div id="coaching-status-host">${coachingStatus()}</div>
       <div class="tgrid"><div class="trow hd g-edit"><div>任务</div><div>类别</div><div>截止日期</div><div>预估时长（小时）</div><div>责任人</div><div>轻重缓急</div><div></div></div>
         ${state.tasks.length ? state.tasks.map(taskEditRow).join('') : '<div class="trow"><div style="color:var(--muted);font-size:12px">暂无任务，请返回上一步重新填写。</div></div>'}

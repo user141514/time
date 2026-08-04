@@ -625,8 +625,8 @@ test('任务拆解格式失败日志包含阶段和固定规则码但不泄漏�
   const marker = 'PRIVATE-DECOMPOSITION-OUTPUT';
   const modelClient = {
     completeJson: async () => ({
-      evidence: [{ marker }],
-      tasks: [],
+      dimension: '今天',
+      atoms: [{ dimension: '今天', marker }],
     }),
   };
   const app = createApp({
@@ -662,7 +662,7 @@ test('任务拆解格式失败日志包含阶段和固定规则码但不泄漏�
       entry => entry.path === '/api/time-management/tasks/decompose',
     );
     assert.ok(logEntry);
-    assert.equal(logEntry.modelOutputStage, 'evidence-task-generation');
+    assert.equal(logEntry.modelOutputStage, 'evidence-agent');
     assert.equal(logEntry.modelOutputReason, 'EVIDENCE_SCHEMA_INVALID');
     assert.equal(logEntry.modelAttempts, 2);
     assert.doesNotMatch(JSON.stringify(logEntry), new RegExp(marker));

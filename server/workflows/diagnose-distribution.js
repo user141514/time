@@ -51,6 +51,7 @@ const validateRequest = ajv.compile({
           nextAction: { type: 'string', maxLength: TEXT_LIMITS.nextAction },
           status: { enum: TASK_STATUS },
           classificationSource: { enum: CLASSIFICATION_SOURCE },
+          evidenceIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 200 } },
         },
       },
     },

@@ -33,6 +33,76 @@ function inputInvalid(block) {
   );
 }
 
+function multiAgentDecompositionFixture(snapshot) {
+  const atom = {
+    id: 'atom-history-1',
+    dimension: '今天',
+    sourceLineIndex: 0,
+    quote: snapshot.goals.今天,
+    kind: 'work',
+    action: '提交方案',
+    actor: { role: 'unknown', name: '' },
+    dueRef: '今天18:00前',
+    estimateRef: '约1h',
+    status: 'planned',
+    relatedTo: '',
+    confidence: { actor: 0, due: 1, estimate: 1, status: 1 },
+  };
+  const cluster = {
+    id: 'cluster-history-1',
+    label: '提交方案',
+    atomIds: [atom.id],
+    relations: [],
+    mergedOwner: { name: '', source: 'implied' },
+    mergedDueRef: '今天18:00前',
+    mergedStatus: 'planned',
+  };
+  return {
+    pipelineVersion: 'multi-agent-v2-phase3',
+    decompositionId: '55555555-5555-4555-8555-555555555555',
+    businessDate: '2026-07-21',
+    stages: [
+      {
+        name: 'evidence-agents',
+        status: 'succeeded',
+        attempts: 1,
+        durationMs: 20,
+        responseFormat: 'json_object',
+        output: { 昨天: [], 今天: [atom], 明天: [], 后天: [] },
+      },
+      {
+        name: 'reconciliation',
+        status: 'succeeded',
+        attempts: 1,
+        durationMs: 10,
+        output: { clusters: [cluster], conflicts: [] },
+      },
+      {
+        name: 'critic',
+        status: 'succeeded',
+        attempts: 5,
+        durationMs: 10,
+        output: {
+          findings: [],
+          checkResults: {
+            owner: { ok: true, findings: 0, attempts: 1, durationMs: 1 },
+            due: { ok: true, findings: 0, attempts: 1, durationMs: 1 },
+            coverage: { ok: true, findings: 0, attempts: 1, durationMs: 1 },
+            dedupe: { ok: true, findings: 0, attempts: 1, durationMs: 1 },
+            source: { ok: true, findings: 0, attempts: 1, durationMs: 1 },
+          },
+          governanceStatus: 'accepted',
+        },
+      },
+    ],
+    taskAtoms: [{
+      taskId: snapshot.tasks[0].id,
+      clusterId: cluster.id,
+      atomId: atom.id,
+    }],
+  };
+}
+
 function stored(snapshot, schemaVersion = 1) {
   return {
     clientRunId: snapshot.clientRunId,
@@ -111,6 +181,69 @@ test('version-3 history accepts task-first decomposition with optional coaching'
   const updatedTaskPrompt = JSON.parse(JSON.stringify(withoutCoaching));
   updatedTaskPrompt.decomposition.stages[0].prompt.version = '2.1.0';
   assert.deepEqual(validateHistorySnapshot(updatedTaskPrompt), updatedTaskPrompt);
+});
+
+test('version-3 history accepts strict multi-agent decomposition and round-trips it', () => {
+  const base = historySnapshot({
+    goals: { 昨天: '', 今天: '今天18:00前提交方案', 明天: '', 后天: '' },
+  });
+  const snapshot = {
+    ...base,
+    decomposition: multiAgentDecompositionFixture(base),
+  };
+
+  assert.deepEqual(validateHistorySnapshot(snapshot), snapshot);
+  assert.deepEqual(decodeStoredSnapshot(stored(snapshot, 3)), snapshot);
+});
+
+test('multi-agent history rejects taskAtoms that reference unknown tasks or atoms', () => {
+  const base = historySnapshot({
+    goals: { 昨天: '', 今天: '今天18:00前提交方案', 明天: '', 后天: '' },
+  });
+  const valid = {
+    ...base,
+    decomposition: multiAgentDecompositionFixture(base),
+  };
+
+  const unknownTask = structuredClone(valid);
+  unknownTask.decomposition.taskAtoms[0].taskId = '99999999-9999-4999-8999-999999999998';
+  inputInvalid(() => validateHistorySnapshot(unknownTask));
+
+  const unknownAtom = structuredClone(valid);
+  unknownAtom.decomposition.taskAtoms[0].atomId = 'ghost-atom';
+  inputInvalid(() => validateHistorySnapshot(unknownAtom));
+});
+
+test('multi-agent history rejects reconciliation relations outside their cluster', () => {
+  const base = historySnapshot({
+    goals: { 昨天: '', 今天: '今天18:00前提交方案', 明天: '', 后天: '' },
+  });
+  const snapshot = {
+    ...base,
+    decomposition: multiAgentDecompositionFixture(base),
+  };
+  const secondAtom = {
+    ...snapshot.decomposition.stages[0].output.今天[0],
+    id: 'atom-history-2',
+  };
+  snapshot.decomposition.stages[0].output.今天.push(secondAtom);
+  snapshot.decomposition.stages[1].output.clusters.push({
+    id: 'cluster-history-2',
+    label: '另一个事项',
+    atomIds: [secondAtom.id],
+    relations: [],
+    mergedOwner: { name: '', source: 'implied' },
+    mergedDueRef: '',
+    mergedStatus: 'planned',
+  });
+  snapshot.decomposition.stages[1].output.clusters[0].relations.push({
+    fromAtom: 'atom-history-1',
+    toAtom: 'atom-history-2',
+    type: 'dependency',
+    rationale: '跨 cluster 引用',
+  });
+
+  inputInvalid(() => validateHistorySnapshot(snapshot));
 });
 
 test('version-3 history accepts yesterday actionable evidence as related coverage', () => {

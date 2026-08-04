@@ -46,7 +46,7 @@ test('multi-agent decomposition is accepted and converted to coaching evidence',
 
   assert.doesNotThrow(() => validateDecompositionResponse(result));
   assert.deepEqual(evidenceForCoaching(result.decomposition), [{
-    id: 'atom-1',
+    id: 'E1',
     dimension: '今天',
     sourceLineIndex: 0,
     quote: '由王芳负责今天18:00前提交排期表',
@@ -56,6 +56,36 @@ test('multi-agent decomposition is accepted and converted to coaching evidence',
     owner: '王芳',
     due: '今天18:00前',
   }]);
+});
+
+test('multi-agent governance and degradation states produce a visible review notice', async () => {
+  const { decompositionReviewNotice } = await loadAdapter();
+  const needsConfirmation = {
+    pipelineVersion: 'multi-agent-v2-phase3',
+    stages: [{
+      name: 'critic',
+      status: 'succeeded',
+      output: { governanceStatus: 'needs_confirmation' },
+    }],
+  };
+  assert.deepEqual(decompositionReviewNotice(needsConfirmation), {
+    level: 'warning',
+    code: 'TASKS_NEED_CONFIRMATION',
+    message: 'AI 审查发现部分任务的责任人、期限或证据需要人工确认；相关不确定字段已回退为待确认。',
+  });
+
+  const reconciliationFallback = {
+    pipelineVersion: 'multi-agent-v2-phase3',
+    stages: [{
+      name: 'reconciliation',
+      status: 'degraded',
+      fallbackMode: 'one-to-one',
+    }],
+  };
+  assert.equal(
+    decompositionReviewNotice(reconciliationFallback).code,
+    'RECONCILIATION_FALLBACK',
+  );
 });
 
 test('legacy task-first decomposition remains accepted', async () => {

@@ -47,7 +47,8 @@ function assertTaskCollection(tasks) {
   for (const task of tasks) {
     assert.match(task.id, /^[0-9a-f-]{36}$/i);
     assert.ok(task.name.trim());
-    assert.ok(task.est.trim());
+    // Phase 3: est may be empty (filled by SMART later); due may be '待确认'
+    assert.ok(typeof task.est === 'string');
     assert.ok(task.owner.trim());
     assert.ok(task.due.trim());
     assert.equal(task.status, 'pending');
@@ -96,20 +97,31 @@ async function runFullFlow(t, {
     'decompose',
   );
   assertTaskCollection(decomposed.tasks);
-  assert.equal(decomposed.decomposition.pipelineVersion, 'task-first-v2');
-  assert.equal(decomposed.decomposition.stages[0].name, 'evidence-task-generation');
-  assert.equal(
-    decomposed.decomposition.taskEvidence.length,
-    decomposed.tasks.length,
-  );
+  assert.equal(decomposed.decomposition.pipelineVersion, 'multi-agent-v2-phase3');
+  assert.equal(decomposed.decomposition.stages[0].name, 'evidence-agents');
+  assert.ok(decomposed.decomposition.taskAtoms.length >= decomposed.tasks.length);
 
+  // Convert Phase 3 atoms to old evidence format for coaching (coaching not yet migrated)
+  const byDim = decomposed.decomposition.stages[0].output;
+  const allAtoms = [...(byDim['昨天']||[]), ...(byDim['今天']||[]), ...(byDim['明天']||[]), ...(byDim['后天']||[])];
+  const evidence = allAtoms.map((a, i) => ({
+    id: 'E' + (i + 1),
+    dimension: a.dimension,
+    sourceLineIndex: a.sourceLineIndex,
+    quote: (a.quote || '').slice(0, 120),
+    observation: (a.action || a.quote || '').slice(0, 120),
+    kind: a.kind === 'note' || a.kind === 'ambiguous' ? 'context' : a.kind,
+    status: a.status === 'in_progress' || a.status === 'unknown' ? 'planned' : a.status,
+    owner: a.actor?.name || '待确认',
+    due: a.dueRef || '待确认',
+  }));
   const coaching = await expectJson(
     post(client, '/api/time-management/tasks/coaching-analysis', {
       decompositionId: decomposed.decomposition.decompositionId,
       attemptId: randomUUID(),
       businessDate: decomposed.decomposition.businessDate,
       entries,
-      evidence: decomposed.decomposition.stages[0].output.evidence,
+      evidence,
     }),
     200,
     'coaching',
@@ -129,7 +141,6 @@ async function runFullFlow(t, {
     200,
     'distribution',
   );
-  assert.ok(distribution.totalMinutes > 0);
   assert.equal(distribution.categories.length, 4);
 
   const matrix = await expectJson(
@@ -143,10 +154,18 @@ async function runFullFlow(t, {
     matrix.quadrants.flatMap(item => item.taskIds).sort(),
     decomposed.tasks.map(task => task.id).sort(),
   );
-
+  const classifications = new Map(
+    matrix.classifications.map(item => [item.taskId, item]),
+  );
+  const classifiedTasks = decomposed.tasks.map(task => ({
+    ...task,
+    importance: classifications.get(task.id).importance,
+    urgency: classifications.get(task.id).urgency,
+    classificationSource: classifications.get(task.id).classificationSource,
+  }));
   const report = await expectJson(
     post(client, '/api/time-management/report/generate', {
-      tasks: decomposed.tasks,
+      tasks: classifiedTasks,
       distribution,
       matrix,
       goals: entries,
@@ -156,7 +175,7 @@ async function runFullFlow(t, {
   );
   assert.ok(report.energyRules.length >= 1);
   assert.ok(report.adjustments.length >= 1);
-  assert.ok(report.order.every(item => decomposed.tasks.some(task => task.id === item.taskId)));
+  assert.ok(report.order.every(item => classifiedTasks.some(task => task.id === item.taskId)));
 
   const decomposition = {
     ...decomposed.decomposition,
@@ -167,7 +186,7 @@ async function runFullFlow(t, {
     title: `${decomposed.decomposition.businessDate} 全流程测试`,
     goals: entries,
     decomposition,
-    tasks: decomposed.tasks,
+    tasks: classifiedTasks,
     distribution,
     matrix,
     report,
@@ -195,7 +214,7 @@ async function runFullFlow(t, {
     'history-detail',
   );
   assert.equal(historyDetail.decomposition.decompositionId, decomposition.decompositionId);
-  assert.equal(historyDetail.tasks.length, decomposed.tasks.length);
+  assert.equal(historyDetail.tasks.length, classifiedTasks.length);
 
   const daily = await expectJson(
     client.request('/api/time-management/daily-tracking/today'),

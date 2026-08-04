@@ -9,7 +9,65 @@ const {
   validateEvidenceResponseV2,
   visitClaims,
 } = require('./decomposition-contracts');
-const { assertEvidenceTrace } = require('./decompose-tasks');
+const { CATEGORY_KEYS } = require('../contracts/time-management');
+const { splitEntries } = require('./check-intake');
+
+function assertEvidenceTrace(response, entries) {
+  const lines = Object.fromEntries(
+    CATEGORY_KEYS.map(key => [key, splitEntries(entries[key])]),
+  );
+  const ids = new Set();
+  const coveredLines = new Set();
+
+  for (const evidence of response.evidence) {
+    if (ids.has(evidence.id)) {
+      throw Object.assign(
+        new Error('AI 返回格式异常，请重试。'),
+        { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['EVIDENCE_ID_DUPLICATED'] },
+      );
+    }
+    ids.add(evidence.id);
+    const sourceLine = lines[evidence.dimension]?.[evidence.sourceLineIndex];
+    if (!sourceLine) {
+      throw Object.assign(
+        new Error('AI 返回格式异常，请重试。'),
+        { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['EVIDENCE_SOURCE_LINE_NOT_FOUND'] },
+      );
+    }
+    if (!sourceLine.includes(evidence.quote)) {
+      throw Object.assign(
+        new Error('AI 返回格式异常，请重试。'),
+        { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['EVIDENCE_QUOTE_NOT_IN_SOURCE_LINE'] },
+      );
+    }
+    if (evidence.owner !== '待确认' && !sourceLine.includes(evidence.owner)) {
+      throw Object.assign(
+        new Error('AI 返回格式异常，请重试。'),
+        { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['EVIDENCE_OWNER_NOT_IN_SOURCE_LINE'] },
+      );
+    }
+    if (evidence.due !== '待确认' && !sourceLine.includes(evidence.due)) {
+      throw Object.assign(
+        new Error('AI 返回格式异常，请重试。'),
+        { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['EVIDENCE_DUE_NOT_IN_SOURCE_LINE'] },
+      );
+    }
+    coveredLines.add(`${evidence.dimension}:${evidence.sourceLineIndex}`);
+  }
+
+  for (const dimension of CATEGORY_KEYS) {
+    const dimLines = lines[dimension];
+    if (!dimLines) continue;
+    for (let index = 0; index < dimLines.length; index += 1) {
+      if (!coveredLines.has(`${dimension}:${index}`)) {
+        throw Object.assign(
+          new Error('AI 返回格式异常，请重试。'),
+          { code: 'MODEL_OUTPUT_INVALID', status: 502, stage: 'evidence-task-generation', failedRules: ['INPUT_LINE_NOT_COVERED'] },
+        );
+      }
+    }
+  }
+}
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BUSINESS_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

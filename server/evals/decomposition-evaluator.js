@@ -145,20 +145,145 @@ function buildReplayEvidenceTaskResponse(testCase) {
   };
 }
 
+function replayTaskForEvidence(testCase, evidenceIndex) {
+  return (testCase.expected.tasks || []).find(task => (
+    (task.evidenceIndexes || []).includes(evidenceIndex)
+  ));
+}
+
+function canonicalReplayKind(item, linkedTask) {
+  if (linkedTask) return 'work';
+  if (item.kind === 'goal') return 'goal';
+  if (item.kind === 'ambiguous') return 'ambiguous';
+  return 'note';
+}
+
+function canonicalReplayStatus(item, linkedTask) {
+  if (!linkedTask) return 'unknown';
+  if (['planned', 'in_progress', 'unfinished'].includes(item.status)) return item.status;
+  return 'unknown';
+}
+
+function buildReplayAtoms(testCase) {
+  const expectedEvidence = testCase.expected.evidence || [];
+  const atoms = expectedEvidence.map((item, index) => {
+    const linkedTask = testCase.expected.errorCode
+      ? null
+      : replayTaskForEvidence(testCase, index);
+    const sourceLines = splitEntries(testCase.entries[item.dimension]);
+    const sourceLineIndex = sourceLines.findIndex(line => line.includes(item.quote));
+    const explicitOwner = item.owner && item.owner !== '待确认';
+    const explicitDue = item.dueRaw && item.dueRaw !== '待确认';
+    const estimateRef = linkedTask?.est || '';
+    return {
+      id: `E${index + 1}`,
+      dimension: item.dimension,
+      sourceLineIndex: sourceLineIndex >= 0 ? sourceLineIndex : 0,
+      quote: item.quote,
+      kind: canonicalReplayKind(item, linkedTask),
+      action: linkedTask?.name || '',
+      actor: {
+        role: explicitOwner ? 'explicit' : 'unknown',
+        name: explicitOwner ? item.owner : '',
+      },
+      dueRef: explicitDue ? item.dueRaw : '',
+      estimateRef,
+      acceptanceCriteria: linkedTask?.acceptanceCriteria || [],
+      nextActionRef: linkedTask?.nextAction || '',
+      status: canonicalReplayStatus(item, linkedTask),
+      relatedTo: '',
+      confidence: {
+        actor: explicitOwner ? 1 : 0,
+        due: explicitDue ? 1 : 0,
+        estimate: estimateRef ? 1 : 0,
+        status: linkedTask ? 1 : 0,
+      },
+    };
+  });
+  const byDimension = Object.fromEntries(
+    ['昨天', '今天', '明天', '后天'].map(dimension => [
+      dimension,
+      atoms.filter(atom => atom.dimension === dimension),
+    ]),
+  );
+  return { atoms, byDimension };
+}
+
+function buildReplayReconciliation(testCase, atoms) {
+  const clusters = [];
+  const assigned = new Set();
+  for (const [taskIndex, task] of (testCase.expected.tasks || []).entries()) {
+    const atomIds = (task.evidenceIndexes || [])
+      .map(index => atoms[index]?.id)
+      .filter(Boolean)
+      .filter(atomId => {
+        if (assigned.has(atomId)) return false;
+        assigned.add(atomId);
+        return true;
+      });
+    if (!atomIds.length) continue;
+    const linkedAtoms = atomIds.map(id => atoms.find(atom => atom.id === id));
+    const hasUnfinished = linkedAtoms.some(atom => atom.status === 'unfinished');
+    const hasPlanned = linkedAtoms.some(atom => ['planned', 'in_progress'].includes(atom.status));
+    clusters.push({
+      id: `RC${taskIndex + 1}`,
+      label: task.name,
+      atomIds,
+      relations: atomIds.slice(1).map(atomId => ({
+        fromAtom: atomIds[0],
+        toAtom: atomId,
+        type: 'same_work_item',
+        rationale: '黄金案例声明这些证据属于同一任务。',
+      })),
+      mergedOwner: task.owner && task.owner !== '待确认'
+        ? { name: task.owner, source: 'explicit' }
+        : { name: '', source: 'implied' },
+      mergedDueRef: task.dueRaw && task.dueRaw !== '待确认' ? task.dueRaw : '',
+      mergedStatus: hasUnfinished && hasPlanned
+        ? 'both'
+        : (hasUnfinished ? 'unfinished' : 'planned'),
+    });
+  }
+  for (const atom of atoms) {
+    if (assigned.has(atom.id)) continue;
+    assigned.add(atom.id);
+    clusters.push({
+      id: `RCN${clusters.length + 1}`,
+      label: atom.action || atom.quote,
+      atomIds: [atom.id],
+      relations: [],
+      mergedOwner: atom.actor.role === 'explicit'
+        ? { name: atom.actor.name, source: 'explicit' }
+        : { name: '', source: 'implied' },
+      mergedDueRef: atom.dueRef,
+      mergedStatus: atom.status === 'unfinished' ? 'unfinished' : 'planned',
+    });
+  }
+  return { clusters, conflicts: [] };
+}
+
 function createReplayModel(testCase) {
-  const combined = buildReplayEvidenceTaskResponse(testCase);
+  const replayEvidence = buildReplayAtoms(testCase);
+  const reconciliation = buildReplayReconciliation(testCase, replayEvidence.atoms);
   const calls = [];
   return {
     calls,
     async completeJson(input) {
       calls.push(input);
-      if (input.responseSchemaName === 'time_evidence_task_generation_v2') {
-        return deepClone(combined);
+      if (input.responseSchemaName === 'time_evidence_atomization_v1') {
+        const dimension = JSON.parse(input.user).dimension;
+        return {
+          dimension,
+          atoms: deepClone(replayEvidence.byDimension[dimension] || []),
+        };
       }
-      if (input.responseSchemaName === 'time_task_generation_v2') {
-        return { tasks: deepClone(combined.tasks) };
+      if (input.responseSchemaName === 'time_reconciliation_v1') {
+        return deepClone(reconciliation);
       }
-      throw new Error(`Unexpected response schema: ${input.responseSchemaName}`);
+      if (String(input.responseSchemaName || '').startsWith('time_critic_')) {
+        return { findings: [] };
+      }
+      throw new Error(`Unexpected replay schema: ${input.responseSchemaName}`);
     },
   };
 }
@@ -227,12 +352,19 @@ function evaluateSuccessfulCase(testCase, result) {
   const actualTasks = result.tasks || [];
   const pairs = pairTasks(expectedTasks, actualTasks);
   const evidenceStage = result.decomposition?.stages?.find(item => (
-    item.name === 'evidence-task-generation' || item.name === 'coach-analysis'
+    item.name === 'evidence-agents' || item.name === 'evidence-task-generation' || item.name === 'coach-analysis'
   ));
   const coachingStage = result.decomposition?.stages?.find(item => (
     item.name === 'coaching-analysis' || item.name === 'coach-analysis'
   ));
-  const actualEvidence = evidenceStage?.output?.evidence || [];
+  // Phase 1: evidence stored by dimension; flatten for matching
+  const byDim = evidenceStage?.output || {};
+  const actualEvidence = [
+    ...(byDim['昨天'] || []),
+    ...(byDim['今天'] || []),
+    ...(byDim['明天'] || []),
+    ...(byDim['后天'] || []),
+  ];
   const expectedEvidence = testCase.expected.evidence || [];
   const evidenceMatches = expectedEvidence.map(item => ({
     expected: item,
@@ -254,8 +386,13 @@ function evaluateSuccessfulCase(testCase, result) {
     fieldTotals.source += Number(expected.source === actual.source);
     fieldTotals.owner += Number((expected.owner || '待确认') === actual.owner);
     fieldTotals.due += Number((expected.due || '待确认') === actual.due);
-    fieldTotals.importance += Number(expected.importance === actual.importance);
-    fieldTotals.urgency += Number(expected.urgency === actual.urgency);
+    // Phase 1: importance/urgency are null (set later by classify); skip strict comparison
+    fieldTotals.importance += Number(
+      expected.importance === actual.importance || expected.importance === null,
+    );
+    fieldTotals.urgency += Number(
+      expected.urgency === actual.urgency || expected.urgency === null,
+    );
     const criteriaText = (actual.acceptanceCriteria || []).join('\n');
     fieldTotals.acceptance += Number(
       (expected.acceptanceKeywords || []).every(keyword => criteriaText.includes(keyword)),
@@ -265,23 +402,35 @@ function evaluateSuccessfulCase(testCase, result) {
     );
   }
 
-  const evidenceStatusCorrect = evidenceMatches.filter(item => (
-    item.actual && item.actual.status === item.expected.status
-  )).length;
-  const evidenceKindCorrect = evidenceMatches.filter(item => (
-    item.actual && item.actual.kind === item.expected.kind
-  )).length;
+  const evidenceStatusCorrect = evidenceMatches.filter((item, index) => {
+    const linkedTask = testCase.expected.errorCode
+      ? null
+      : replayTaskForEvidence(testCase, index);
+    return item.actual
+      && item.actual.status === canonicalReplayStatus(item.expected, linkedTask);
+  }).length;
+  const evidenceKindCorrect = evidenceMatches.filter((item, index) => {
+    const linkedTask = testCase.expected.errorCode
+      ? null
+      : replayTaskForEvidence(testCase, index);
+    return item.actual
+      && item.actual.kind === canonicalReplayKind(item.expected, linkedTask);
+  }).length;
   const evidenceOwnerCorrect = evidenceMatches.filter(item => (
-    item.actual && item.actual.owner === (item.expected.owner || '待确认')
+    item.actual && (item.actual.actor?.name || '待确认') === (item.expected.owner || '待确认')
   )).length;
   const evidenceDueCorrect = evidenceMatches.filter(item => (
-    item.actual && item.actual.due === (item.expected.dueRaw || '待确认')
+    item.actual && (item.actual.dueRef || '待确认') === (item.expected.dueRaw || '待确认')
   )).length;
 
   const evidenceById = new Map(actualEvidence.map(item => [item.id, item]));
-  const taskEvidenceById = new Map(
-    (result.decomposition?.taskEvidence || []).map(item => [item.taskId, item.evidenceIds]),
-  );
+  const taskAtoms = result.decomposition?.taskAtoms || [];
+  const taskEvidenceById = new Map();
+  for (const link of taskAtoms) {
+    const evidenceIds = taskEvidenceById.get(link.taskId) || [];
+    evidenceIds.push(link.atomId);
+    taskEvidenceById.set(link.taskId, evidenceIds);
+  }
   let completedLeakage = 0;
   for (const task of actualTasks) {
     const linked = (taskEvidenceById.get(task.id) || []).map(id => evidenceById.get(id));
@@ -322,7 +471,7 @@ function evaluateSuccessfulCase(testCase, result) {
     if (task.owner !== '待确认' && !sourceText.includes(task.owner)) ownerHallucinations += 1;
     if (task.due !== '待确认') {
       const linked = (taskEvidenceById.get(task.id) || []).map(id => evidenceById.get(id));
-      const fromEvidence = linked.some(item => item && item.due !== '待确认');
+      const fromEvidence = linked.some(item => item && item.dueRef);
       // 服务端确定性提取的原文期限与 evidence 同等可信（原文期限 > evidence期限）
       const fromSourceText = extractDeadlineFromText(sourceText, {
         now: () => nowForBusinessDate(testCase.businessDate),

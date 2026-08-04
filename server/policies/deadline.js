@@ -12,7 +12,7 @@ const RELATIVE_DAY_OFFSETS = Object.freeze({
 const WEEKDAY_NAMES = Object.freeze({ 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 });
 const CLOCK_TIME = /(\d{1,2})[:：](\d{2})/;
 const CN_TIME = /(\d{1,2})点(?:(\d{1,2})分?)?/;
-const TIME_PERIOD = /(上午|下午|晚上|凌晨)\s*$/;
+const TIME_PERIOD = /(上午|下午|晚上|凌晨|中午|傍晚)\s*$/;
 const DAY_WORD = new RegExp(`(${Object.keys(RELATIVE_DAY_OFFSETS).join('|')})`);
 const WEEK_DAY = /本周([一二三四五六日天])/;
 const MONTH_END = /(?:月底|月末|月底前|本月内|(?<![一-龥])月内)/;
@@ -158,7 +158,7 @@ function extractDeadlineFromText(text, context = {}) {
     if (time && timeMatch === cn) {
       const hour = Number(cn[1]);
       const period = TIME_PERIOD.exec(after.slice(0, cn.index));
-      if (period && (period[1] === '下午' || period[1] === '晚上') && hour < 12) {
+      if (period && (period[1] === '下午' || period[1] === '晚上' || period[1] === '傍晚') && hour < 12) {
         time = `${String(hour + 12).padStart(2, '0')}:${time.slice(3)}`;
       }
     }
@@ -211,24 +211,29 @@ function applyDeadlineUrgency(task, context = {}) {
   );
   if (parsed && parsed.date <= referenceDate) {
     result.urgency = '高';
+    result.importance = result.importance ?? '高';
     return result;
   }
 
   if (hasUrgencySignal(task, context.goalText)) {
     result.urgency = '高';
+    result.importance = result.importance ?? '高';
     return result;
   }
 
   if (parsed) {
     const daysUntilDue = calendarDayDistance(referenceDate, parsed.date);
     result.urgency = daysUntilDue <= 7 ? '中' : '低';
+    result.importance = result.importance ?? result.urgency;
     return result;
   }
 
   if (result.source === '今天') {
     result.urgency = '高';
+    result.importance = result.importance ?? '高';
   } else {
     result.urgency = '低';
+    result.importance = result.importance ?? '低';
   }
   return result;
 }

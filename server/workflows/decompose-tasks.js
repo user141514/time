@@ -2,7 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const {
   CATEGORY_KEYS,
-  SOURCE_TO_CATEGORY,
+  CATEGORY_TO_SOURCE,
   dedupeCrossSourceTasks,
   extractOwnerFromText,
   normalizeDueForWrite,
@@ -10,26 +10,21 @@ const {
   parseEstimatedMinutes,
 } = require('../contracts/time-management');
 const { shanghaiBusinessDay } = require('../daily-tracking/business-date');
-const { applyDeadlineUrgency, extractDeadlineFromText } = require('../policies/deadline');
-const { loadVersionedPrompt } = require('../prompts/load-versioned-prompt');
+const { extractDeadlineFromText } = require('../policies/deadline');
 const { checkIntake, splitEntries } = require('./check-intake');
 const { checkTaskSmart } = require('./check-task-smart');
+const { DECOMPOSITION_ITEM_LIMIT } = require('./decomposition-contracts');
+const { runEvidenceAgent } = require('./evidence-agent');
 const {
-  DECOMPOSITION_ITEM_LIMIT,
-  EVIDENCE_TASK_MODEL_RESPONSE_SCHEMA,
-  TASK_MODEL_RESPONSE_V2_SCHEMA,
-  validateEvidenceResponseV2,
-  validateTaskModelResponseV2,
-  validateTaskResponseV2,
-} = require('./decomposition-contracts');
-const {
-  ACTIONABLE_EVIDENCE_STATUSES,
-  NON_ACTIONABLE_EVIDENCE_STATUSES,
-  isDirectlyRelatedAuxiliary,
-  taskSourceMatchesPrimary,
-} = require('./task-evidence-policy');
+  assertFactAtomTrace,
+  assertNoAtomIdDuplicates,
+  validateMergedEvidence,
+} = require('./evidence-contracts');
 
-const PIPELINE_VERSION = 'task-first-v2';
+const { runReconciliationAgent } = require('./reconciliation-agent');
+const { runCriticAgent } = require('./critic-agent');
+
+const PIPELINE_VERSION = 'multi-agent-v2-phase3';
 
 function publicError(code, message, status) {
   return Object.assign(new Error(message), { code, status, expose: true });
@@ -42,205 +37,31 @@ function outputError(stage, failedRules = []) {
   );
 }
 
-function normalizeModelError(error, stage) {
-  if (error.code === 'MODEL_OUTPUT_INVALID') {
-    return Object.assign(outputError(stage), {
-      diagnosticCode: error.diagnosticCode,
-    });
-  }
-  if (error.code === 'MODEL_TIMEOUT') {
-    return publicError('MODEL_TIMEOUT', 'AI 响应超时，请重试。', 504);
-  }
-  if (error.code === 'MODEL_CANCELLED') {
-    return publicError('REQUEST_CANCELLED', '请求已取消。', 499);
-  }
-  if ([
-    'MODEL_UPSTREAM_ERROR',
-    'MODEL_RESPONSE_ENVELOPE_TOO_LARGE',
-    'MODEL_ERROR_BODY_TOO_LARGE',
-  ].includes(error.code)) {
-    return publicError('MODEL_UPSTREAM_ERROR', 'AI 服务暂时不可用，请稍后重试。', 502);
-  }
-  return error;
-}
-
 function linesForEntries(entries) {
   return Object.fromEntries(
     CATEGORY_KEYS.map(key => [key, splitEntries(entries[key])]),
   );
 }
 
-function assertEvidenceTrace(response, entries) {
-  const lines = linesForEntries(entries);
-  const ids = new Set();
-  const coveredLines = new Set();
-
-  for (const evidence of response.evidence) {
-    if (ids.has(evidence.id)) {
-      throw outputError('evidence-task-generation', ['EVIDENCE_ID_DUPLICATED']);
-    }
-    ids.add(evidence.id);
-    const sourceLine = lines[evidence.dimension]?.[evidence.sourceLineIndex];
-    if (!sourceLine) {
-      throw outputError('evidence-task-generation', ['EVIDENCE_SOURCE_LINE_NOT_FOUND']);
-    }
-    if (!sourceLine.includes(evidence.quote)) {
-      throw outputError('evidence-task-generation', ['EVIDENCE_QUOTE_NOT_IN_SOURCE_LINE']);
-    }
-    if (evidence.owner !== '待确认' && !sourceLine.includes(evidence.owner)) {
-      throw outputError('evidence-task-generation', ['EVIDENCE_OWNER_NOT_IN_SOURCE_LINE']);
-    }
-    if (evidence.due !== '待确认' && !sourceLine.includes(evidence.due)) {
-      throw outputError('evidence-task-generation', ['EVIDENCE_DUE_NOT_IN_SOURCE_LINE']);
-    }
-    coveredLines.add(`${evidence.dimension}:${evidence.sourceLineIndex}`);
-  }
-
-  for (const dimension of CATEGORY_KEYS) {
-    for (const index of lines[dimension].keys()) {
-      if (!coveredLines.has(`${dimension}:${index}`)) {
-        throw outputError('evidence-task-generation', ['INPUT_LINE_NOT_COVERED']);
-      }
-    }
-  }
-}
-
-function evidenceMap(response) {
-  return new Map(response.evidence.map(item => [item.id, item]));
-}
-
-function assertTaskShapeAndSemantics(response, evidenceResponse) {
-  const byEvidenceId = evidenceMap(evidenceResponse);
-  const primaryCoverage = new Set();
-  const relatedYesterdayCoverage = new Set();
-
-  for (const task of response.tasks) {
-    if (!task.evidenceIds.length) {
-      throw outputError('evidence-task-generation', ['TASK_WITHOUT_EVIDENCE']);
-    }
-    if (new Set(task.evidenceIds).size !== task.evidenceIds.length) {
-      throw outputError('evidence-task-generation', ['TASK_EVIDENCE_DUPLICATED']);
-    }
-    if (task.status !== 'pending') {
-      throw outputError('evidence-task-generation', ['TASK_STATUS_NOT_PENDING']);
-    }
-    const referenced = task.evidenceIds.map(id => byEvidenceId.get(id));
-    if (referenced.some(item => !item)) {
-      throw outputError('evidence-task-generation', ['TASK_EVIDENCE_NOT_FOUND']);
-    }
-    if (referenced.some(item => NON_ACTIONABLE_EVIDENCE_STATUSES.has(item.status))) {
-      throw outputError('evidence-task-generation', ['NON_ACTIONABLE_EVIDENCE_USED']);
-    }
-
-    const primary = referenced[0];
-    for (const auxiliary of referenced.slice(1)) {
-      if (auxiliary.dimension !== '昨天') continue;
-      if (!isDirectlyRelatedAuxiliary(primary, auxiliary)) {
-        throw outputError('evidence-task-generation', ['TASK_AUXILIARY_EVIDENCE_UNRELATED']);
-      }
-      relatedYesterdayCoverage.add(auxiliary.id);
-    }
-    if (!taskSourceMatchesPrimary(task, primary)) {
-      throw outputError('evidence-task-generation', ['TASK_SOURCE_MISMATCH']);
-    }
-    if (task.source === '临时' && !/临时|突发|插入|插单/.test(primary.quote)) {
-      throw outputError('evidence-task-generation', ['TEMPORARY_SOURCE_UNSUPPORTED']);
-    }
-    if (
-      ['短期目标', '中长期'].includes(task.source)
-      && task.acceptanceCriteria.length === 0
-    ) {
-      throw outputError('evidence-task-generation', ['FUTURE_TASK_WITHOUT_ACCEPTANCE']);
-    }
-    const estimatedMinutes = parseEstimatedMinutes(task.est);
-    if (
-      estimatedMinutes !== null
-      && estimatedMinutes > 8 * 60
-      && (task.source !== '中长期' || !task.nextAction.trim())
-    ) {
-      throw outputError('evidence-task-generation', ['OVERSIZED_TASK_NOT_DECOMPOSED']);
-    }
-    primaryCoverage.add(primary.id);
-  }
-
-  for (const evidence of evidenceResponse.evidence) {
-    if (!ACTIONABLE_EVIDENCE_STATUSES.has(evidence.status)) continue;
-    const isCovered = primaryCoverage.has(evidence.id)
-      || (evidence.dimension === '昨天' && relatedYesterdayCoverage.has(evidence.id));
-    if (!isCovered) {
-      throw outputError('evidence-task-generation', ['ACTIONABLE_EVIDENCE_NOT_COVERED']);
-    }
-  }
-}
-
-function validateEvidencePart(response, entries) {
-  if (!response || typeof response !== 'object' || Array.isArray(response)) {
-    throw outputError('evidence-task-generation', ['JSON_SCHEMA_INVALID']);
-  }
-  const evidenceResponse = { evidence: response.evidence };
-  if (!validateEvidenceResponseV2(evidenceResponse)) {
-    throw outputError('evidence-task-generation', ['EVIDENCE_SCHEMA_INVALID']);
-  }
-  assertEvidenceTrace(evidenceResponse, entries);
-  return evidenceResponse;
-}
-
-function groundTaskResponse(taskResponse, evidenceResponse) {
-  const byEvidenceId = evidenceMap(evidenceResponse);
-  return {
-    tasks: taskResponse.tasks.map(candidate => {
-      const primary = byEvidenceId.get(candidate.evidenceIds[0]);
-      return {
-        ...candidate,
-        due: primary.due,
-        owner: primary.owner,
-      };
-    }),
-  };
-}
-
-function modelTaskResponse(response) {
-  return {
-    tasks: Array.isArray(response?.tasks)
-      ? response.tasks.map(({ due, owner, ...candidate }) => candidate)
-      : response?.tasks,
-  };
-}
-
-function validateTaskPart(response, evidenceResponse) {
-  const taskResponse = modelTaskResponse(response);
-  if (!validateTaskModelResponseV2(taskResponse)) {
-    throw outputError('evidence-task-generation', ['TASK_SCHEMA_INVALID']);
-  }
-  assertTaskShapeAndSemantics(taskResponse, evidenceResponse);
-  const grounded = groundTaskResponse(taskResponse, evidenceResponse);
-  if (!validateTaskResponseV2(grounded)) {
-    throw outputError('evidence-task-generation', ['TASK_GROUNDING_INVALID']);
-  }
-  return grounded;
-}
-
-function validateJointResponse(response, entries) {
-  const keys = response && typeof response === 'object'
-    ? Object.keys(response).sort()
-    : [];
-  if (keys.length !== 2 || keys[0] !== 'evidence' || keys[1] !== 'tasks') {
-    throw outputError('evidence-task-generation', ['JSON_SCHEMA_INVALID']);
-  }
-  const evidenceResponse = validateEvidencePart(response, entries);
-  const taskResponse = validateTaskPart(response, evidenceResponse);
-  return { evidenceResponse, taskResponse };
-}
-
-function canRetry(deadlineAt, monotonicNow) {
-  return !Number.isFinite(deadlineAt) || deadlineAt - monotonicNow() >= 2_000;
-}
-
 function copy(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-async function runEvidenceTaskStage({
+function normalizeEstimateRef(value) {
+  if (typeof value !== 'string') return '';
+  const cleaned = value
+    .trim()
+    .replace(/[。；;，,]+$/u, '')
+    .replace(/^(?:(?:预计|大约|约|耗时)\s*)+/u, '');
+  const minutes = parseEstimatedMinutes(cleaned);
+  if (!Number.isFinite(minutes) || minutes <= 0) return '';
+  if (minutes < 60) return `${minutes}分钟`;
+  return `${Number((minutes / 60).toFixed(2))}h`;
+}
+
+// 四个维度各跑一个 evidence agent（昨天/今天/明天/后天），并行无依赖。
+// 每个 agent 只抽取自己维度的 FactAtom；空维度跳过。合并后做一次边界校验。
+async function runEvidenceAgents({
   modelClient,
   entries,
   businessDate,
@@ -251,185 +72,254 @@ async function runEvidenceTaskStage({
   onAttempt,
   monotonicNow,
 }) {
-  const taskPrompt = loadVersionedPrompt('decomposition.evidence-task-generation');
-  const correctionPrompt = loadVersionedPrompt('decomposition.task-generation');
-  const attemptEvents = [];
-  let modelCalls = 0;
-  let correctionPromptUsed = null;
   const startedAt = monotonicNow();
-
-  const recordAttempt = event => {
-    attemptEvents.push(event);
-    try {
-      onAttempt?.({ ...event, stage: 'evidence-task-generation' });
-    } catch {
-      // Logging must not affect generation.
+  const results = await Promise.all(CATEGORY_KEYS.map(dimension => {
+    if (splitEntries(entries?.[dimension]).length === 0) {
+      return { dimension, atoms: [], attempts: 0, durationMs: 0, responseFormat: null };
     }
-  };
+    return runEvidenceAgent({
+      dimension,
+      entries,
+      businessDate,
+      modelClient,
+      signal,
+      deadlineAt,
+      responseFormatMode,
+      maxTokens,
+      onAttempt,
+      monotonicNow,
+    });
+  }));
 
-  async function invoke({ prompt, input, schema, schemaName }) {
-    modelCalls += 1;
-    try {
-      return await modelClient.completeJson({
-        system: prompt.text,
-        user: JSON.stringify(input),
-        temperature: 0.1,
-        maxAttempts: 1,
-        responseSchema: schema,
-        responseSchemaName: schemaName,
-        signal,
-        deadlineAt,
-        responseFormatMode,
-        maxTokens,
-        maxContentBytes: 64 * 1024,
-        onAttempt: recordAttempt,
-      });
-    } catch (error) {
-      throw normalizeModelError(error, 'evidence-task-generation');
-    }
+  const byDimension = Object.fromEntries(results.map(result => [result.dimension, result.atoms]));
+  const merged = { atoms: results.flatMap(result => result.atoms), byDimension };
+  if (!validateMergedEvidence(merged)) {
+    throw outputError('evidence-agents', ['MERGED_EVIDENCE_SCHEMA_INVALID']);
+  }
+  // 每个 agent 内部已做过行级 trace 校验；合并边界只需防跨维度 ID 重复
+  assertNoAtomIdDuplicates(merged.atoms);
+  const lines = linesForEntries(entries);
+  for (const dimension of CATEGORY_KEYS) {
+    assertFactAtomTrace(merged.byDimension[dimension], lines[dimension]);
   }
 
-  const baseInput = { goals: entries, businessDate };
-  let firstResponse;
-  try {
-    firstResponse = await invoke({
-      prompt: taskPrompt,
-      input: baseInput,
-      schema: EVIDENCE_TASK_MODEL_RESPONSE_SCHEMA,
-      schemaName: 'time_evidence_task_generation_v2',
-    });
-  } catch (error) {
-    if (error.code !== 'MODEL_OUTPUT_INVALID' || !canRetry(deadlineAt, monotonicNow)) {
-      throw error;
-    }
-    const corrected = await invoke({
-      prompt: taskPrompt,
-      input: {
-        ...baseInput,
-        retryFeedback: {
-          failedRules: [error.diagnosticCode || 'MODEL_JSON_INVALID'],
-          correction: '重新生成完整 evidence 与 tasks JSON。',
-        },
-      },
-      schema: EVIDENCE_TASK_MODEL_RESPONSE_SCHEMA,
-      schemaName: 'time_evidence_task_generation_v2',
-    });
-    validateJointResponse(corrected, entries);
-    firstResponse = corrected;
-  }
-
-  let evidenceResponse;
-  try {
-    evidenceResponse = validateEvidencePart(firstResponse, entries);
-  } catch (error) {
-    if (error.code !== 'MODEL_OUTPUT_INVALID' || !canRetry(deadlineAt, monotonicNow)) {
-      throw error;
-    }
-    const corrected = await invoke({
-      prompt: taskPrompt,
-      input: {
-        ...baseInput,
-        retryFeedback: {
-          failedRules: error.failedRules,
-          correction: '重新生成完整 evidence 与 tasks，逐行修正证据。',
-        },
-      },
-      schema: EVIDENCE_TASK_MODEL_RESPONSE_SCHEMA,
-      schemaName: 'time_evidence_task_generation_v2',
-    });
-    validateJointResponse(corrected, entries);
-    firstResponse = corrected;
-    evidenceResponse = { evidence: corrected.evidence };
-  }
-
-  let taskResponse;
-  try {
-    taskResponse = validateTaskPart(firstResponse, evidenceResponse);
-  } catch (error) {
-    if (error.code !== 'MODEL_OUTPUT_INVALID' || !canRetry(deadlineAt, monotonicNow)) {
-      throw error;
-    }
-    const frozenEvidence = copy(evidenceResponse.evidence);
-    correctionPromptUsed = correctionPrompt;
-    const corrected = await invoke({
-      prompt: correctionPrompt,
-      input: {
-        ...baseInput,
-        evidence: frozenEvidence,
-        retryFeedback: {
-          failedRules: error.failedRules,
-          correction: '只返回 tasks，禁止返回或修改 evidence。',
-        },
-      },
-      schema: TASK_MODEL_RESPONSE_V2_SCHEMA,
-      schemaName: 'time_task_generation_v2',
-    });
-    taskResponse = validateTaskPart(corrected, { evidence: frozenEvidence });
-    evidenceResponse = { evidence: frozenEvidence };
-  }
-
-  const successfulAttempt = [...attemptEvents]
-    .reverse()
-    .find(event => !event.errorCode);
   return {
-    prompt: taskPrompt,
-    correctionPrompt: correctionPromptUsed,
-    response: {
-      evidence: evidenceResponse.evidence,
-      tasks: taskResponse.tasks,
-    },
-    attempts: Math.max(modelCalls, attemptEvents.length),
-    durationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
-    responseFormat: successfulAttempt?.responseFormat
+    atoms: merged.atoms,
+    byDimension,
+    totalAttempts: results.reduce((sum, result) => sum + result.attempts, 0),
+    totalDurationMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+    responseFormat: results.find(result => result.responseFormat)?.responseFormat
       || (responseFormatMode === 'json_object' ? 'json_object' : 'json_schema'),
-    fallbackUsed: attemptEvents.some(event => event.fallbackUsed),
   };
 }
 
-function normalizeGeneratedTasks(taskResponse, evidenceResponse, goals, now) {
-  const instant = now();
-  const deadlineContext = {
-    now: () => instant,
-    timeZone: 'Asia/Shanghai',
-  };
-  const byEvidenceId = evidenceMap(evidenceResponse);
-  const lines = linesForEntries(goals);
-  const normalized = taskResponse.tasks.map(candidate => {
-    const primary = byEvidenceId.get(candidate.evidenceIds[0]);
-    const sourceText = goals[SOURCE_TO_CATEGORY[candidate.source]] || '';
-    const task = normalizeTask({
-      ...candidate,
-      classificationSource: 'ai-extraction',
-    });
-    const normalizedTask = normalizeDueForWrite(applyDeadlineUrgency(task, {
-      ...deadlineContext,
-      goalText: sourceText,
-    }));
-    // 服务端确定性权威：期限/责任人直接从 primary evidence 的 quote 提取，
-    // 不依赖生成后的任务名重新定位原文（任务名可能被模型改写）。
-    const extractionSource = primary?.quote || '';
-    const extractedDeadline = extractDeadlineFromText(extractionSource, deadlineContext);
-    const grounded = {
-      ...normalizedTask,
-      due: extractedDeadline ? extractedDeadline.date : normalizedTask.due,
-      ...(extractedDeadline?.time || normalizedTask.dueTime ? { dueTime: extractedDeadline?.time || normalizedTask.dueTime } : {}),
-      owner: normalizedTask.owner === '待确认'
-        ? extractOwnerFromText(extractionSource) || normalizedTask.owner
-        : normalizedTask.owner,
-    };
-    // 期限被原文权威覆盖后需重新判定紧急度
-    const reUrged = applyDeadlineUrgency(grounded, {
-      ...deadlineContext,
-      goalText: sourceText,
-    });
+function primaryAtomScore(atom) {
+  let score = 0;
+  if (atom.dimension === '今天' && atom.status === 'in_progress') score = 600;
+  else if (atom.dimension === '今天' && atom.status === 'planned') score = 550;
+  else if (atom.status === 'in_progress') score = 500;
+  else if (atom.status === 'planned' && atom.dimension === '明天') score = 450;
+  else if (atom.status === 'planned' && atom.dimension === '后天') score = 425;
+  else if (atom.status === 'planned') score = 400;
+  else if (atom.status === 'unfinished' && atom.dimension === '今天') score = 350;
+  else if (atom.status === 'unfinished') score = 300;
+  else score = 100;
+  if (atom.actor?.role === 'explicit' && atom.actor?.name) score += 20;
+  if (atom.dueRef) score += 10;
+  if (atom.estimateRef) score += 5;
+  return score;
+}
+
+function selectPrimaryAtom(workAtoms) {
+  return [...workAtoms].sort((left, right) => (
+    primaryAtomScore(right) - primaryAtomScore(left)
+  ))[0];
+}
+
+function conflictsForCluster(conflicts, cluster) {
+  const clusterAtoms = new Set(cluster.atomIds);
+  return conflicts.filter(conflict => (
+    conflict.atomIds.every(atomId => clusterAtoms.has(atomId))
+  ));
+}
+
+function explicitAcceptanceCriteria(atoms) {
+  const seen = new Set();
+  const criteria = [];
+  for (const atom of atoms) {
+    for (const item of atom.acceptanceCriteria || []) {
+      const normalized = String(item).trim();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      criteria.push(normalized);
+      if (criteria.length >= 5) return criteria;
+    }
+  }
+  return criteria;
+}
+
+function explicitNextAction(atoms, primary) {
+  if (primary?.nextActionRef?.trim()) return primary.nextActionRef.trim();
+  return atoms.find(atom => atom.nextActionRef?.trim())?.nextActionRef.trim() || '';
+}
+
+function unresolvedFieldForFinding(category) {
+  if (category === 'owner_hallucination' || category === 'semantic_role_error') return 'owner';
+  if (category === 'due_contamination') return 'due';
+  if (category === 'missing_evidence' || category === 'orphan_evidence') return 'evidence';
+  if (category === 'duplicate_task') return 'duplicate';
+  if (category === 'wrong_source') return 'source';
+  return 'review';
+}
+
+function applyCriticFindings(compiled, findings = []) {
+  const blockerCount = findings.filter(finding => finding.severity === 'blocker').length;
+  const warningCount = findings.filter(finding => finding.severity === 'warning').length;
+  const compiledItems = compiled.compiledItems.map(item => {
+    const relevant = findings.filter(finding => finding.taskIds.includes(item.task.id));
+    if (relevant.length === 0) {
+      return {
+        ...item,
+        atomIds: [...item.atomIds],
+        unresolvedFields: [...item.unresolvedFields],
+      };
+    }
+    const unresolvedFields = new Set(item.unresolvedFields);
+    let task = { ...item.task };
+    for (const finding of relevant) {
+      const field = unresolvedFieldForFinding(finding.category);
+      unresolvedFields.add(field);
+      if (finding.severity !== 'blocker') continue;
+      if (field === 'owner') {
+        task.owner = '待确认';
+      }
+      if (field === 'due') {
+        const { dueTime, ...withoutDueTime } = task;
+        task = { ...withoutDueTime, due: '待确认' };
+      }
+    }
     return {
-      task: reUrged,
-      evidenceIds: [...candidate.evidenceIds],
+      ...item,
+      task,
+      atomIds: [...item.atomIds],
+      reviewRequired: true,
+      unresolvedFields: [...unresolvedFields],
     };
   });
-  // 昨天遗留与今天同名行动只保留今天行动（同名同来源保持独立）
-  const keptIds = new Set(dedupeCrossSourceTasks(normalized.map(item => item.task)).map(task => task.id));
-  return normalized.filter(item => keptIds.has(item.task.id));
+  return {
+    tasks: compiledItems.map(item => item.task),
+    compiledItems,
+    taskAtoms: compiled.taskAtoms.map(item => ({ ...item })),
+    governanceStatus: blockerCount > 0
+      ? 'needs_confirmation'
+      : (warningCount > 0 ? 'review_recommended' : 'accepted'),
+  };
+}
+
+// Phase 2 编译：每个 WorkItemCluster 产生一条规范任务（多对一归并）。
+// 无 cluster 的 work 原子按 1:1 回退编译。
+function compileTasksFromClusters({ clusters = [], conflicts = [], atoms, byDimension, entries, now }) {
+  const instant = now();
+  const deadlineContext = { now: () => instant, timeZone: 'Asia/Shanghai' };
+  const atomById = new Map(atoms.map(a => [a.id, a]));
+  const clusteredAtomIds = new Set(clusters.flatMap(c => c.atomIds));
+  const compiled = [];
+
+  for (const cluster of clusters) {
+    const clusterAtoms = cluster.atomIds.map(id => atomById.get(id)).filter(Boolean);
+    const workAtoms = clusterAtoms.filter(a => a.kind === 'work');
+    if (workAtoms.length === 0) continue;
+    const primary = selectPrimaryAtom(workAtoms);
+    const matchedConflicts = conflictsForCluster(conflicts, cluster);
+    const unresolvedFields = [...new Set(matchedConflicts
+      .filter(conflict => conflict.resolution === 'human_needed')
+      .map(conflict => conflict.field))];
+    if (cluster.mergedOwner.source === 'conflict' && !unresolvedFields.includes('owner')) {
+      unresolvedFields.push('owner');
+    }
+    const dueUnresolved = unresolvedFields.includes('due');
+    const ownerUnresolved = unresolvedFields.includes('owner');
+    const extracted = dueUnresolved
+      ? null
+      : extractDeadlineFromText(
+        cluster.mergedDueRef || primary.dueRef || primary.quote, deadlineContext,
+      );
+    const candidate = {
+      name: cluster.label || primary.action || primary.quote,
+      source: CATEGORY_TO_SOURCE[primary.dimension],
+      due: extracted?.date || '待确认',
+      ...(extracted?.time ? { dueTime: extracted.time } : {}),
+      owner: ownerUnresolved
+        ? '待确认'
+        : (cluster.mergedOwner.source === 'explicit'
+          ? cluster.mergedOwner.name
+          : extractOwnerFromText(primary.quote) || '待确认'),
+      status: 'pending',
+      est: normalizeEstimateRef(
+        workAtoms.find(item => normalizeEstimateRef(item.estimateRef))?.estimateRef,
+      ),
+      importance: null,
+      urgency: null,
+      acceptanceCriteria: explicitAcceptanceCriteria(clusterAtoms),
+      nextAction: explicitNextAction(clusterAtoms, primary),
+      classificationSource: 'unclassified',
+    };
+    const task = normalizeDueForWrite(normalizeTask(candidate));
+    compiled.push({
+      task,
+      clusterId: cluster.id,
+      atomIds: [...cluster.atomIds],
+      reviewRequired: unresolvedFields.length > 0,
+      unresolvedFields,
+    });
+  }
+  // 未聚类 work 原子：1:1 回退编译
+  for (const atom of atoms) {
+    if (clusteredAtomIds.has(atom.id)) continue;
+    if (atom.kind !== 'work') continue;
+    const extracted = extractDeadlineFromText(atom.dueRef || atom.quote, deadlineContext);
+    const candidate = {
+      name: atom.action || atom.quote,
+      source: CATEGORY_TO_SOURCE[atom.dimension],
+      due: extracted?.date || '待确认',
+      ...(extracted?.time ? { dueTime: extracted.time } : {}),
+      owner: atom.actor.role === 'explicit'
+        ? atom.actor.name
+        : extractOwnerFromText(atom.quote) || '待确认',
+      status: 'pending',
+      est: normalizeEstimateRef(atom.estimateRef),
+      importance: null,
+      urgency: null,
+      acceptanceCriteria: explicitAcceptanceCriteria([atom]),
+      nextAction: explicitNextAction([atom], atom),
+      classificationSource: 'unclassified',
+    };
+    const task = normalizeDueForWrite(normalizeTask(candidate));
+    compiled.push({
+      task,
+      clusterId: null,
+      atomIds: [atom.id],
+      reviewRequired: false,
+      unresolvedFields: [],
+    });
+  }
+  const keptIds = new Set(dedupeCrossSourceTasks(compiled.map(item => item.task)).map(task => task.id));
+  const kept = compiled.filter(item => keptIds.has(item.task.id));
+  return {
+    tasks: kept.map(item => item.task),
+    compiledItems: kept.map(item => ({
+      task: item.task,
+      clusterId: item.clusterId,
+      atomIds: [...item.atomIds],
+      reviewRequired: item.reviewRequired,
+      unresolvedFields: [...item.unresolvedFields],
+    })),
+    taskAtoms: kept.flatMap(item => item.atomIds.map(atomId => ({
+      taskId: item.task.id,
+      ...(item.clusterId ? { clusterId: item.clusterId } : {}),
+      atomId,
+    }))),
+  };
 }
 
 async function decomposeTasks({
@@ -457,7 +347,7 @@ async function decomposeTasks({
 
   const instant = now();
   const businessDate = shanghaiBusinessDay(instant).trackingDate;
-  const stage = await runEvidenceTaskStage({
+  const stage = await runEvidenceAgents({
     modelClient,
     entries: intake.entries,
     businessDate,
@@ -468,15 +358,51 @@ async function decomposeTasks({
     onAttempt,
     monotonicNow,
   });
-  const taskResponse = { tasks: stage.response.tasks };
-  const evidenceResponse = { evidence: stage.response.evidence };
-  const normalized = normalizeGeneratedTasks(
-    taskResponse,
-    evidenceResponse,
-    intake.entries,
-    () => instant,
-  );
-  if (normalized.length === 0) {
+  // Phase 2: Reconciliation — 跨栏聚类去重
+  let reconciliationStage = null;
+  let clusters = [];
+  let conflicts = [];
+  try {
+    const reconResult = await runReconciliationAgent({
+      atoms: stage.atoms,
+      byDimension: stage.byDimension,
+      entries: intake.entries,
+      businessDate,
+      modelClient,
+      signal,
+      deadlineAt,
+      responseFormatMode,
+      maxTokens,
+      onAttempt,
+      monotonicNow,
+    });
+    clusters = reconResult.clusters;
+    conflicts = reconResult.conflicts;
+    reconciliationStage = {
+      name: 'reconciliation',
+      status: 'succeeded',
+      attempts: reconResult.attempts,
+      durationMs: reconResult.durationMs,
+      output: { clusters, conflicts },
+    };
+  } catch (error) {
+    // Reconciliation 失败不阻塞主流程，回退到 1:1 编译
+    reconciliationStage = {
+      name: 'reconciliation',
+      status: 'degraded',
+      errorCode: error.code || 'RECONCILIATION_ERROR',
+      fallbackMode: 'one-to-one',
+    };
+  }
+  const compiled = compileTasksFromClusters({
+    clusters,
+    conflicts,
+    atoms: stage.atoms,
+    byDimension: stage.byDimension,
+    entries: intake.entries,
+    now: () => instant,
+  });
+  if (compiled.tasks.length === 0) {
     throw publicError(
       'NO_ACTIONABLE_TASKS',
       '没有识别出可执行任务，请调整四栏内容后重试。',
@@ -484,59 +410,76 @@ async function decomposeTasks({
     );
   }
 
-  // 昨天遗留与今天同名行动只保留今天行动（同名同来源保持独立）
-  const keptIds = new Set(dedupeCrossSourceTasks(normalized.map(item => item.task)).map(task => task.id));
-  const kept = normalized.filter(item => keptIds.has(item.task.id));
-  const tasks = kept.map(item => item.task);
-  // 存储快照与 taskEvidence 保持一致，用 evidenceIds 匹配过滤原始 grounded 任务
-  const keptEvidenceIds = new Set(kept.map(item => JSON.stringify(item.evidenceIds)));
-  stage.response = { ...stage.response, tasks: stage.response.tasks.filter(
-    t => keptEvidenceIds.has(JSON.stringify(t.evidenceIds))
-  )};
-  const smart = checkTaskSmart({ tasks });
+  // Phase 3: Critic — 5 路并行审查
+  let criticStage = null;
+  let governed = compiled;
+  try {
+    const criticResult = await runCriticAgent({
+      compiledItems: compiled.compiledItems,
+      clusters,
+      atoms: stage.atoms,
+      entries: intake.entries,
+      businessDate,
+      modelClient,
+      signal,
+      deadlineAt,
+      responseFormatMode,
+      maxTokens,
+      onAttempt,
+      monotonicNow,
+    });
+    governed = applyCriticFindings(compiled, criticResult.findings);
+    criticStage = {
+      name: 'critic',
+      status: criticResult.status,
+      attempts: criticResult.attempts,
+      durationMs: criticResult.durationMs,
+      output: {
+        findings: criticResult.findings,
+        checkResults: criticResult.checkResults,
+        governanceStatus: governed.governanceStatus,
+      },
+    };
+  } catch (error) {
+    criticStage = {
+      name: 'critic',
+      status: 'degraded',
+      errorCode: error.code || 'CRITIC_ERROR',
+    };
+  }
+
+  const smart = checkTaskSmart({ tasks: governed.tasks });
   return {
     intake: {
       lineCounts: intake.lineCounts,
       totalLines: intake.totalLines,
       warnings: intake.warnings,
     },
-    tasks,
+    tasks: governed.tasks,
     smart,
     decomposition: {
       pipelineVersion: PIPELINE_VERSION,
       decompositionId,
       businessDate,
       stages: [{
-        name: 'evidence-task-generation',
+        name: 'evidence-agents',
         status: 'succeeded',
-        prompt: {
-          id: stage.prompt.id,
-          version: stage.prompt.version,
-          sha256: stage.prompt.sha256,
-        },
-        ...(stage.correctionPrompt ? {
-          correctionPrompt: {
-            id: stage.correctionPrompt.id,
-            version: stage.correctionPrompt.version,
-            sha256: stage.correctionPrompt.sha256,
-          },
-        } : {}),
-        attempts: stage.attempts,
-        durationMs: stage.durationMs,
+        attempts: stage.totalAttempts,
+        durationMs: stage.totalDurationMs,
         responseFormat: stage.responseFormat,
-        fallbackUsed: stage.fallbackUsed,
-        output: stage.response,
-      }],
-      taskEvidence: normalized.map(item => ({
-        taskId: item.task.id,
-        evidenceIds: item.evidenceIds,
-      })),
+        output: stage.byDimension,
+      },
+      ...(reconciliationStage ? [reconciliationStage] : []),
+      ...(criticStage ? [criticStage] : []),
+      ],
+      taskAtoms: governed.taskAtoms,
     },
   };
 }
 
 module.exports = {
-  assertEvidenceTrace,
-  assertTaskShapeAndSemantics,
+  applyCriticFindings,
+  compileTasksFromClusters,
   decomposeTasks,
+  runEvidenceAgents,
 };

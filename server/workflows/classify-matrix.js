@@ -39,8 +39,8 @@ const validateRequest = ajv.compile({
           classificationSource: { enum: CLASSIFICATION_SOURCE },
           source: { enum: SOURCES },
           due: { type: 'string', maxLength: TEXT_LIMITS.due },
-          dueTime: { type: "string", maxLength: 10 },
-          est: { type: 'string', minLength: 1, maxLength: TEXT_LIMITS.est },
+          dueTime: { type: 'string', maxLength: 10 },
+          est: { type: 'string', maxLength: TEXT_LIMITS.est },
           owner: { type: 'string', maxLength: TEXT_LIMITS.owner },
           acceptanceCriteria: {
             type: 'array',
@@ -53,13 +53,14 @@ const validateRequest = ajv.compile({
           },
           nextAction: { type: 'string', maxLength: TEXT_LIMITS.nextAction },
           status: { enum: TASK_STATUS },
+          evidenceIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 200 } },
         },
       },
     },
   },
 });
 
-const validateResponse = ajv.compile({
+const MATRIX_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: ['classifications', 'note'],
@@ -81,6 +82,7 @@ const validateResponse = ajv.compile({
     note: { type: 'string', maxLength: 4000 },
   },
 });
+const validateResponse = ajv.compile(MATRIX_RESPONSE_SCHEMA);
 
 const QUADRANTS = Object.freeze([
   Object.freeze({ name: '第一象限', priority: 1, action: '立即做' }),
@@ -213,6 +215,9 @@ async function classifyMatrix({
     user: JSON.stringify({ tasks: input.tasks }),
     temperature: 0.2,
     maxAttempts: 1,
+    responseSchema: MATRIX_RESPONSE_SCHEMA,
+    responseSchemaName: 'time_classify_matrix_v2',
+    maxContentBytes: 64 * 1024,
     signal,
     deadlineAt,
     onAttempt,

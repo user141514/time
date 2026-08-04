@@ -29,6 +29,12 @@ const {
   quadrantFor,
 } = require('../contracts/time-management');
 const { splitEntries } = require('../workflows/check-intake');
+const { FACT_ATOM_SCHEMA } = require('../workflows/evidence-contracts');
+const { RECONCILIATION_RESPONSE_SCHEMA } = require('../workflows/reconciliation-contracts');
+const {
+  CRITIC_CHECKS,
+  CRITIC_RESPONSE_SCHEMA,
+} = require('../workflows/critic-contracts');
 const {
   ACTIONABLE_EVIDENCE_STATUSES,
   NON_ACTIONABLE_EVIDENCE_STATUSES,
@@ -211,7 +217,7 @@ const coachingStageSchema = {
     output: COACHING_RESPONSE_SCHEMA,
   },
 };
-const decompositionSchemaV3 = {
+const taskFirstDecompositionSchemaV3 = {
   type: 'object',
   additionalProperties: false,
   required: [
@@ -229,6 +235,149 @@ const decompositionSchemaV3 = {
     },
     taskEvidence: decompositionSchemaV2.properties.taskEvidence,
   },
+};
+
+const evidenceAgentsStageSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'status', 'attempts', 'durationMs', 'responseFormat', 'output'],
+  properties: {
+    name: { const: 'evidence-agents' },
+    status: { const: 'succeeded' },
+    attempts: { type: 'integer', minimum: 0, maximum: 8 },
+    durationMs: { type: 'integer', minimum: 0 },
+    responseFormat: { enum: ['json_schema', 'json_object'] },
+    output: {
+      type: 'object',
+      additionalProperties: false,
+      required: GOAL_KEYS,
+      properties: Object.fromEntries(GOAL_KEYS.map(key => [key, {
+        type: 'array',
+        maxItems: 50,
+        items: FACT_ATOM_SCHEMA,
+      }])),
+    },
+  },
+};
+
+const reconciliationSucceededStageSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'status', 'attempts', 'durationMs', 'output'],
+  properties: {
+    name: { const: 'reconciliation' },
+    status: { const: 'succeeded' },
+    attempts: { type: 'integer', minimum: 1, maximum: 2 },
+    durationMs: { type: 'integer', minimum: 0 },
+    output: RECONCILIATION_RESPONSE_SCHEMA,
+  },
+};
+
+const reconciliationDegradedStageSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'status', 'errorCode'],
+  properties: {
+    name: { const: 'reconciliation' },
+    status: { const: 'degraded' },
+    errorCode: { type: 'string', minLength: 1, maxLength: 100 },
+    fallbackMode: { const: 'one-to-one' },
+  },
+};
+
+const criticCheckMetaSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok', 'findings', 'attempts', 'durationMs'],
+  properties: {
+    ok: { type: 'boolean' },
+    errorCode: { type: 'string', minLength: 1, maxLength: 100 },
+    findings: { type: 'integer', minimum: 0, maximum: 50 },
+    attempts: { type: 'integer', minimum: 0, maximum: 3 },
+    durationMs: { type: 'integer', minimum: 0 },
+  },
+};
+
+const criticCompletedStageSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'status', 'attempts', 'durationMs', 'output'],
+  properties: {
+    name: { const: 'critic' },
+    status: { enum: ['succeeded', 'partial', 'degraded'] },
+    attempts: { type: 'integer', minimum: 0, maximum: 15 },
+    durationMs: { type: 'integer', minimum: 0 },
+    output: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['findings', 'checkResults', 'governanceStatus'],
+      properties: {
+        findings: CRITIC_RESPONSE_SCHEMA.properties.findings,
+        checkResults: {
+          type: 'object',
+          additionalProperties: false,
+          required: CRITIC_CHECKS,
+          properties: Object.fromEntries(CRITIC_CHECKS.map(key => [key, criticCheckMetaSchema])),
+        },
+        governanceStatus: { enum: ['accepted', 'review_recommended', 'needs_confirmation'] },
+      },
+    },
+  },
+};
+
+const criticFailedStageSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'status', 'errorCode'],
+  properties: {
+    name: { const: 'critic' },
+    status: { const: 'degraded' },
+    errorCode: { type: 'string', minLength: 1, maxLength: 100 },
+  },
+};
+
+const multiAgentDecompositionSchemaV3 = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['pipelineVersion', 'decompositionId', 'businessDate', 'stages', 'taskAtoms'],
+  properties: {
+    pipelineVersion: { enum: ['multi-agent-v2-phase1', 'multi-agent-v2-phase2', 'multi-agent-v2-phase3'] },
+    decompositionId: { type: 'string', pattern: UUID_PATTERN },
+    businessDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+    stages: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 4,
+      items: {
+        anyOf: [
+          evidenceAgentsStageSchema,
+          reconciliationSucceededStageSchema,
+          reconciliationDegradedStageSchema,
+          criticCompletedStageSchema,
+          criticFailedStageSchema,
+          coachingStageSchema,
+        ],
+      },
+    },
+    taskAtoms: {
+      type: 'array',
+      maxItems: TASK_LIMIT * 20,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['taskId', 'atomId'],
+        properties: {
+          taskId: { type: 'string', pattern: UUID_PATTERN },
+          clusterId: { type: 'string', minLength: 1, maxLength: 200 },
+          atomId: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+      },
+    },
+  },
+};
+
+const decompositionSchemaV3 = {
+  anyOf: [taskFirstDecompositionSchemaV3, multiAgentDecompositionSchemaV3],
 };
 
 const snapshotSchemaV2 = {
@@ -571,8 +720,124 @@ function assertDecompositionSemanticsV2(decomposition, tasks, goals) {
   if (finalTaskIds.size !== tasks.length) throw inputError();
 }
 
+function assertMultiAgentDecompositionSemantics(decomposition, tasks, goals) {
+  const stageByName = new Map();
+  for (const stage of decomposition.stages) {
+    if (stageByName.has(stage.name)) throw inputError();
+    stageByName.set(stage.name, stage);
+  }
+
+  const evidenceStage = stageByName.get('evidence-agents');
+  if (!evidenceStage) throw inputError();
+  const lines = Object.fromEntries(
+    GOAL_KEYS.map(key => [key, splitEntries(goals[key])]),
+  );
+  const atoms = GOAL_KEYS.flatMap(key => evidenceStage.output[key]);
+  const atomsById = new Map();
+  const coveredLines = new Set();
+  for (const atom of atoms) {
+    const sourceLine = lines[atom.dimension]?.[atom.sourceLineIndex];
+    if (
+      atomsById.has(atom.id)
+      || !sourceLine
+      || !sourceLine.includes(atom.quote)
+    ) {
+      throw inputError();
+    }
+    atomsById.set(atom.id, atom);
+    coveredLines.add(`${atom.dimension}:${atom.sourceLineIndex}`);
+  }
+  for (const dimension of GOAL_KEYS) {
+    for (const index of lines[dimension].keys()) {
+      if (!coveredLines.has(`${dimension}:${index}`)) throw inputError();
+    }
+  }
+
+  const reconciliationStage = stageByName.get('reconciliation');
+  const clustersById = new Map();
+  const atomCluster = new Map();
+  if (reconciliationStage?.status === 'succeeded') {
+    for (const cluster of reconciliationStage.output.clusters) {
+      if (clustersById.has(cluster.id)) throw inputError();
+      clustersById.set(cluster.id, cluster);
+      const clusterAtoms = new Set(cluster.atomIds);
+      for (const atomId of cluster.atomIds) {
+        if (!atomsById.has(atomId) || atomCluster.has(atomId)) throw inputError();
+        atomCluster.set(atomId, cluster.id);
+      }
+      for (const relation of cluster.relations) {
+        if (
+          !clusterAtoms.has(relation.fromAtom)
+          || !clusterAtoms.has(relation.toAtom)
+        ) {
+          throw inputError();
+        }
+      }
+    }
+    if (atomCluster.size !== atomsById.size) throw inputError();
+    for (const conflict of reconciliationStage.output.conflicts) {
+      const clusterIds = new Set();
+      for (const atomId of conflict.atomIds) {
+        if (!atomsById.has(atomId)) throw inputError();
+        const clusterId = atomCluster.get(atomId);
+        if (!clusterId) throw inputError();
+        clusterIds.add(clusterId);
+      }
+      if (clusterIds.size !== 1) throw inputError();
+    }
+  }
+
+  const taskIds = new Set(tasks.map(task => task.id));
+  const taskAtomEdges = new Set();
+  for (const link of decomposition.taskAtoms) {
+    const edge = `${link.taskId}:${link.atomId}`;
+    if (
+      taskAtomEdges.has(edge)
+      || !taskIds.has(link.taskId)
+      || !atomsById.has(link.atomId)
+    ) {
+      throw inputError();
+    }
+    if (link.clusterId) {
+      const cluster = clustersById.get(link.clusterId);
+      if (!cluster || !cluster.atomIds.includes(link.atomId)) throw inputError();
+    }
+    taskAtomEdges.add(edge);
+  }
+
+  const criticStage = stageByName.get('critic');
+  if (criticStage?.output) {
+    for (const finding of criticStage.output.findings) {
+      if (
+        finding.taskIds.some(taskId => !taskIds.has(taskId))
+        || finding.atomIds.some(atomId => !atomsById.has(atomId))
+      ) {
+        throw inputError();
+      }
+    }
+  }
+
+  const coachingStage = stageByName.get('coaching-analysis');
+  if (coachingStage) {
+    const coachingEvidenceIds = new Set(atoms.map((atom, index) => `E${index + 1}`));
+    visitClaims(coachingStage.output.coachingAnalysis, claim => {
+      if (
+        new Set(claim.evidenceIds).size !== claim.evidenceIds.length
+        || claim.evidenceIds.some(id => !coachingEvidenceIds.has(id))
+        || (claim.evidenceIds.length === 0 && !claim.text.startsWith('证据不足'))
+      ) {
+        throw inputError();
+      }
+    });
+  }
+}
+
 function assertDecompositionSemanticsV3(decomposition, tasks, goals) {
   if (decomposition == null) return;
+  if (decomposition.pipelineVersion.startsWith('multi-agent-v2')) {
+    assertMultiAgentDecompositionSemantics(decomposition, tasks, goals);
+    return;
+  }
   const stageByName = new Map();
   for (const stage of decomposition.stages) {
     if (stageByName.has(stage.name)) throw inputError();
